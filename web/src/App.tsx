@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { MarkdownText, plainText } from "./Markdown";
 import { isStreaming, type AssistantItem, type ChatState, type Item, type Review } from "./reducer";
 import { useChat } from "./useChat";
 
@@ -15,10 +16,7 @@ function Assistant({ item }: { item: AssistantItem }) {
         {item.contested && <Badge tone="contested">contested</Badge>}
         {item.interrupted && <Badge tone="error">interrupted</Badge>}
       </div>
-      <p className="text">
-        {item.text}
-        {!item.complete && !item.interrupted && <span className="caret" aria-hidden="true" />}
-      </p>
+      <MarkdownText>{item.complete || item.interrupted ? item.text : `${item.text} ▍`}</MarkdownText>
       {item.contested && item.retractionIssues.length > 0 && (
         <ul className="issues">
           {item.retractionIssues.map((issue) => (
@@ -101,7 +99,7 @@ function ObserverPanel({ state }: { state: ChatState }) {
       ) : (
         <ul>
           {state.reviews.map((review) => {
-            const text = messages.get(review.messageId) ?? "";
+            const text = plainText(messages.get(review.messageId) ?? "");
             return <ReviewCard key={review.messageId} review={review} preview={text.length > 90 ? `${text.slice(0, 90)}…` : text} />;
           })}
         </ul>
