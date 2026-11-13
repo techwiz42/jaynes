@@ -25,7 +25,7 @@ A chat application where the **actor** (Gemini) talks to the user and the **obse
 
 ## Backend work
 
-- Review the existing scaffold (`config.py`, `events.py`, `actor.py`, `observer.py`, `orchestrator.py`, `server.py`) before extending it.
+- The brief mentions an existing scaffold; none exists. Write it: `config.py`, `events.py` (append-only log with replay and live fan-out), `actor.py`, `observer.py` (returns a verdict, never fails open), `orchestrator.py`, `server.py`.
 - pytest with no network, using fake actor and observer objects (`stream(messages, system=...)`, `review(transcript, draft)`): clean turn, retracted turn with exactly one correction, correction not reviewed, observer parse failure emits `error` and does not retract, actor failure pops the unanswered user turn, event log replays from `after`.
 - Verify SDK usage against current docs (`client.aio.models.generate_content_stream`, async `messages.create`).
 - README with setup and run (`uvicorn bicameral.server:app --reload`); `.env.example`.
