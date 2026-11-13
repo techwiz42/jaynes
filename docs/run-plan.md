@@ -1,6 +1,6 @@
 # Plan: running jaynes on melville
 
-Status: **decided, nothing built yet.** Jaynes is private and has no authentication, so it runs on a machine on the local network (melville) and is not hosted online. No cloud server is needed. An earlier version of this plan proposed a small cloud VM; that was dropped.
+Status: **built and running on melville.** The text below is the plan it was built from; where the scripts differ, the scripts are current. Jaynes is private and has no authentication, so it runs on a machine on the local network (melville) and is not hosted online. No cloud server is needed. An earlier version of this plan proposed a small cloud VM; that was dropped.
 
 ## What runs where
 
@@ -25,7 +25,7 @@ Consequences:
 | Homebrew | Present (old macOS, so some packages may not install) | Avoid depending on it for anything new |
 | Admin rights | `sudo` needs a password | Everything lives in the user's home directory; no system-wide changes |
 
-Not yet checked: whether the laptop can reach melville away from the home network.
+Not yet checked: whether the laptop can reach melville away from the home network. Melville's sleep setting shows "never" (`pmset`), although it may sleep in practice.
 
 ## Layout on melville
 

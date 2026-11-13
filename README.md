@@ -9,7 +9,7 @@ The design is **stream-and-retract**. The user sees the actor's reply as it stre
 
 ## Status
 
-The backend and the frontend are written and tested (no network needed). Deployment to melville is not built yet. The design brief is [`docs/design.md`](docs/design.md) and the plan for running it is [`docs/run-plan.md`](docs/run-plan.md).
+Working. The backend and frontend are written and tested (no network needed), and the app runs on a local-network machine (melville) with the real models: the Gemini actor streams a reply and the Haiku observer reviews it. A retraction has been exercised with scripted fakes and in a real browser, but not yet with the live models. The design brief is [`docs/design.md`](docs/design.md) and the plan for running it is [`docs/run-plan.md`](docs/run-plan.md).
 
 ## Setup and run
 
@@ -49,6 +49,26 @@ npm run dev                           # dev server on :5173, proxying the API to
 When `web/dist` exists the backend serves it, so after `npm run build` the whole app is at `http://localhost:8000`. The page shows the actor's reply as it streams; a retracted draft stays visible, struck through and marked *contested*, with the correction below it; the observer's verdicts are in the side panel; errors appear inline. If the connection drops, the page reconnects and asks only for the events it missed.
 
 Add `?after=<event id>` (or a `Last-Event-ID` header) to the events URL to resume after a dropped connection. `GET /healthz` reports the number of sessions and turns in progress.
+
+## Running it on melville
+
+The server runs as a `launchd` service on melville, bound to `127.0.0.1:8000`, so it is reachable only through an SSH forward:
+
+```
+ssh -L 8000:localhost:8000 melville        # then open http://localhost:8000
+```
+
+From a clone of this repository on the laptop:
+
+```
+scripts/set-jaynes-keys.sh                 # prompts for the two API keys (typed without echo) and stores them on melville, readable only by its owner
+scripts/update-jaynes.sh                   # deploys origin/main: melville clones the commit, web/ is built here and uploaded, the service restarts
+scripts/update-jaynes.sh <sha>             # deploy or roll back to a pushed commit
+scripts/update-jaynes.sh --restart         # restart only
+scripts/update-jaynes.sh --status          # what is deployed and whether it answers
+```
+
+Paste only the key value at the prompts, not a `NAME=value` line. A deploy refuses to restart while a reply is being written (add `--force` to override). A restart ends all conversations, since they live in memory. Logs are in `~/Library/Logs/jaynes.log` on melville.
 
 ## How a turn works
 
