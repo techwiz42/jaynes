@@ -9,7 +9,7 @@ The design is **stream-and-retract**. The user sees the actor's reply as it stre
 
 ## Status
 
-The backend is written and tested (no network needed). The frontend (`web/`) and the deployment to melville are not built yet. The design brief is [`docs/design.md`](docs/design.md) and the plan for running it is [`docs/run-plan.md`](docs/run-plan.md).
+The backend and the frontend are written and tested (no network needed). Deployment to melville is not built yet. The design brief is [`docs/design.md`](docs/design.md) and the plan for running it is [`docs/run-plan.md`](docs/run-plan.md).
 
 ## Setup and run
 
@@ -33,6 +33,20 @@ curl -N localhost:8000/sessions/<id>/events                               # leav
 curl -s -X POST localhost:8000/sessions/<id>/messages \
      -H 'content-type: application/json' -d '{"text": "Hello"}'          # 202; the events stream in the other terminal
 ```
+
+### Frontend
+
+Node 20.19+ or 22.12+. The app is in `web/`.
+
+```
+cd web
+npm ci
+npm test                              # the event reducer and event parsing
+npm run build                         # type-checks, then builds web/dist
+npm run dev                           # dev server on :5173, proxying the API to :8000 (run the backend too)
+```
+
+When `web/dist` exists the backend serves it, so after `npm run build` the whole app is at `http://localhost:8000`. The page shows the actor's reply as it streams; a retracted draft stays visible, struck through and marked *contested*, with the correction below it; the observer's verdicts are in the side panel; errors appear inline. If the connection drops, the page reconnects and asks only for the events it missed.
 
 Add `?after=<event id>` (or a `Last-Event-ID` header) to the events URL to resume after a dropped connection. `GET /healthz` reports the number of sessions and turns in progress.
 
@@ -82,7 +96,7 @@ There is no authentication, and none is planned for the first version, so **the 
 
 ```
 bicameral/     backend package: config, events, actor, observer, orchestrator, server
-web/           Vite + React + TypeScript app (not built yet)
+web/           Vite + React + TypeScript app
 tests/         pytest, no network (fake actor and observer)
 docs/          design brief and run plan
 scripts/       deploy script
