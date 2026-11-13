@@ -9,7 +9,7 @@ The design is **stream-and-retract**. The user sees the actor's reply as it stre
 
 ## Status
 
-Design stage. The design brief is [`docs/design.md`](docs/design.md) and the plan for the server and its deployment is [`docs/deploy-plan.md`](docs/deploy-plan.md). No code yet. Nothing is deployed and no cloud resources exist.
+Design stage. The design brief is [`docs/design.md`](docs/design.md) and the plan for running it is [`docs/run-plan.md`](docs/run-plan.md). No code yet and nothing is deployed.
 
 ## How a turn works
 
@@ -44,7 +44,7 @@ Keys come from the environment and never go in this repository. A `.env.example`
 
 ## Access and limits
 
-There is no authentication, and none is planned for the first version, so **the service must not be reachable from the internet**. It is meant to be used through an SSH tunnel to a private server (see the deployment plan). Because it is private, there are no rate limits or spend ceiling in the app; set budget alerts with the model providers instead.
+There is no authentication, and none is planned for the first version, so **the service must not be reachable from the internet**. It runs on a machine on the local network and is used through an SSH port-forward (see the run plan). Because it is private, there are no rate limits or spend ceiling in the app; set budget alerts with the model providers instead.
 
 ## Out of scope for now
 
@@ -59,6 +59,6 @@ There is no authentication, and none is planned for the first version, so **the 
 bicameral/     backend package: config, events, actor, observer, orchestrator, server
 web/           Vite + React + TypeScript app
 tests/         pytest, no network (fake actor and observer)
-docs/          design brief and deployment plan
+docs/          design brief and run plan
 scripts/       deploy script
 ```
