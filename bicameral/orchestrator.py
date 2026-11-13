@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import List
 
 from .actor import ACTOR_SYSTEM, Actor, ActorError, Message
 from .events import EventLog
 from .observer import Observer, ObserverError, Verdict
+
+logger = logging.getLogger(__name__)
 
 INTERNAL_NOTE_LABEL = "[Internal note from the observer, not from the user]"
 
@@ -57,6 +60,7 @@ class Session:
                 draft = await self._stream("draft", draft_id)
             except Exception as error:
                 self.history.pop()                                   # the user turn went unanswered
+                _log_failure("actor", error)
                 self.log.append("error", where="actor", message=_describe(error))
                 return
             self.log.append("draft_complete", message_id=draft_id, text=draft)
@@ -65,6 +69,7 @@ class Session:
             try:
                 verdict = await self.observer.review(self.history[:-1], draft)
             except Exception as error:                               # never treat a failed review as ok
+                _log_failure("observer", error)
                 self.log.append("error", where="observer", message=_describe(error))
                 return
             self.log.append("observer_verdict", message_id=draft_id, **verdict.model_dump())
@@ -78,6 +83,7 @@ class Session:
                 correction = await self._stream("correction", correction_id, corrects=draft_id)
             except Exception as error:
                 self.history.pop()                                   # drop the note; the correction never happened
+                _log_failure("actor_correction", error)
                 self.log.append("error", where="actor_correction", message=_describe(error))
                 return
             self.log.append("draft_complete", message_id=correction_id, text=correction)
@@ -85,7 +91,14 @@ class Session:
 
 
 def _describe(error: Exception) -> str:
-    """A message for the user: what kind of failure, never a key or a request body."""
+    """A message for the user: what kind of failure, with the provider's status code when it gave one, never a key or a request body."""
     if isinstance(error, (ActorError, ObserverError)):
         return str(error)
-    return f"{type(error).__name__}"
+    code, status = getattr(error, "code", None), getattr(error, "status", None)
+    detail = " ".join(str(part) for part in (code, status) if isinstance(part, (int, str)) and part != "")
+    return f"{type(error).__name__} {detail}".strip()
+
+
+def _log_failure(where: str, error: Exception) -> None:
+    """For the server's log: the provider's own message, which says why (for example "high demand"). Never a key: the SDKs do not put one in an error."""
+    logger.warning("%s failed: %s %s", where, type(error).__name__, str(getattr(error, "message", error))[:300])

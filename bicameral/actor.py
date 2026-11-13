@@ -1,6 +1,7 @@
 """The actor: talks to the user. Gemini, streamed."""
 from __future__ import annotations
 
+import asyncio
 from typing import AsyncIterator, Dict, List, Optional, Protocol
 
 Message = Dict[str, str]          # {"role": "user" | "assistant", "content": str}
@@ -23,19 +24,49 @@ ACTOR_SYSTEM = (
 )
 
 
+TRANSIENT_CODES = {429, 500, 503, 504}
+RETRY_DELAYS = (1.0, 3.0)          # seconds to wait before the second and third attempts
+
+
+def is_transient(error: Exception) -> bool:
+    """A failure that is likely to pass on its own: the provider is overloaded or rate-limiting, not rejecting the request."""
+    return getattr(error, "code", None) in TRANSIENT_CODES
+
+
 class GeminiActor:
-    def __init__(self, api_key: str, model: str) -> None:
+    def __init__(self, api_key: str, model: str, retry_delays: tuple = RETRY_DELAYS) -> None:
         from google import genai          # imported here so the tests need no network and no key
         self._client = genai.Client(api_key=api_key)
         self._model = model
+        self._retry_delays = retry_delays
 
-    async def stream(self, messages: List[Message], system: Optional[str] = None) -> AsyncIterator[str]:
+    def _request(self, messages: List[Message], system: Optional[str] = None):
         from google.genai import types
         contents = [
             types.Content(role="model" if m["role"] == "assistant" else "user", parts=[types.Part.from_text(text=m["content"])])
             for m in messages
         ]
         config = types.GenerateContentConfig(system_instruction=system) if system else None
+        return contents, config
+
+    async def _chunks(self, contents, config) -> AsyncIterator:
+        """One attempt at the streaming call, yielding the raw chunks."""
         async for chunk in await self._client.aio.models.generate_content_stream(model=self._model, contents=contents, config=config):
-            if chunk.text:
-                yield chunk.text
+            yield chunk
+
+    async def stream(self, messages: List[Message], system: Optional[str] = None) -> AsyncIterator[str]:
+        """The reply as it is written. A transient failure before any text has arrived is retried after a short wait; once text has been shown it cannot be taken back,
+        so a failure after that is raised."""
+        contents, config = self._request(messages, system)
+        for attempt in range(len(self._retry_delays) + 1):
+            started = False
+            try:
+                async for chunk in self._chunks(contents, config):
+                    if chunk.text:
+                        started = True
+                        yield chunk.text
+                return
+            except Exception as error:
+                if started or attempt >= len(self._retry_delays) or not is_transient(error):
+                    raise
+                await asyncio.sleep(self._retry_delays[attempt])

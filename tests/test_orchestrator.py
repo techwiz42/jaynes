@@ -115,3 +115,13 @@ async def test_turns_are_serialised():
     await asyncio.gather(session.handle_user_message("one"), session.handle_user_message("two"))
     order = [e.type for e in session.log.replay() if e.type in ("user_message", "observer_verdict")]
     assert order == ["user_message", "observer_verdict", "user_message", "observer_verdict"]
+
+
+async def test_the_error_names_the_providers_status_code_but_nothing_else():
+    class ProviderError(Exception):
+        code, status, message = 503, "UNAVAILABLE", "high demand, api key=secret-key-123"
+
+    session = Session("s", FakeActor(ProviderError("boom")), FakeObserver())
+    await session.handle_user_message("hi")
+    shown = session.log.replay()[-1].data["message"]
+    assert shown == "ProviderError 503 UNAVAILABLE" and "secret-key-123" not in shown
