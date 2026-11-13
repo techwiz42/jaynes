@@ -106,3 +106,18 @@ def test_the_summary_separates_catching_mistakes_from_false_alarms():
 
 def test_an_empty_summary_does_not_divide_by_zero():
     assert "actor alone" in render(summarize([]))
+
+
+async def test_the_rate_limiter_spaces_calls_evenly():
+    from experiments.modes import RateLimiter
+    now = [0.0]
+    slept = []
+
+    async def sleep(seconds):
+        slept.append(round(seconds, 3))
+        now[0] += seconds
+
+    limiter = RateLimiter(10, clock=lambda: now[0], sleep=sleep)       # one call every 6 seconds
+    for _ in range(4):
+        await limiter.wait()
+    assert slept == [6.0, 6.0, 6.0]

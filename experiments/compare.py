@@ -1,6 +1,6 @@
 """Compare ways of checking an answer, on questions with a known right answer.
 
-  python -m experiments.compare [--reps 3] [--concurrency 4] [--limit N] [--seed 1]
+  python -m experiments.compare [--reps 3] [--rpm 10] [--concurrency 4] [--limit N] [--seed 1]
 
 Each case is run in two modes, and the results are read three ways:
 
@@ -25,7 +25,7 @@ from typing import Any, Dict, List, Optional
 from bicameral.orchestrator import Session
 
 from .cases import CASES, Case
-from .modes import SELF_CRITIQUE_SYSTEM, Meter, NullObserver, extract_final
+from .modes import SELF_CRITIQUE_SYSTEM, Meter, NullObserver, RateLimiter, extract_final
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 MODES = ("two_agent", "self_critique")
@@ -185,6 +185,7 @@ async def main_async(args: argparse.Namespace) -> None:
         cases = random.Random(args.seed).sample(cases, min(args.limit, len(cases)))
     jobs = [(case, mode, rep) for case in cases for mode in MODES for rep in range(args.reps)]
     gate = asyncio.Semaphore(args.concurrency)
+    limiter = RateLimiter(args.rpm) if args.rpm else None
     runs: List[Run] = []
 
     async def one(case: Case, mode: str, rep: int) -> None:
@@ -192,15 +193,15 @@ async def main_async(args: argparse.Namespace) -> None:
             for attempt in range(2):
                 meter = Meter()
                 if mode == "two_agent":
-                    actor = MeteredActor(settings.gemini_api_key, settings.actor_model, meter)
+                    actor = MeteredActor(settings.gemini_api_key, settings.actor_model, meter, limiter=limiter)
                     observer = HaikuObserver(settings.anthropic_api_key, settings.observer_model, settings.observer_timeout_seconds, client=MeteredClient(anthropic, meter))
                 else:
-                    actor = MeteredActor(settings.gemini_api_key, settings.actor_model, meter, system_override=SELF_CRITIQUE_SYSTEM)
+                    actor = MeteredActor(settings.gemini_api_key, settings.actor_model, meter, system_override=SELF_CRITIQUE_SYSTEM, limiter=limiter)
                     observer = NullObserver()
                 run = await run_case(case, mode, rep, Session(f"{case.id}-{mode}-{rep}", actor, observer), meter)
                 if not run.actor_error or attempt == 1:
                     break
-                await asyncio.sleep(10)                      # one more try after a pause, so a busy moment does not cost a data point
+                await asyncio.sleep(45)                      # one more try after a pause (a per-minute quota clears in under a minute), so it does not cost a data point
             runs.append(run)
             print(f"\r{len(runs)}/{len(jobs)} runs", end="", flush=True)
 
@@ -222,6 +223,7 @@ async def main_async(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--reps", type=int, default=3, help="runs per case and mode (default 3)")
+    parser.add_argument("--rpm", type=float, default=10, help="Gemini calls a minute across all runs; 0 for no limit (default 10: the free tier allows 15 and chat shares it)")
     parser.add_argument("--concurrency", type=int, default=4, help="runs at once (default 4)")
     parser.add_argument("--limit", type=int, default=0, help="only this many randomly chosen cases (a smoke test)")
     parser.add_argument("--seed", type=int, default=1, help="which cases --limit picks")

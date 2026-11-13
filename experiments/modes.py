@@ -1,6 +1,7 @@
 """The self-critique mode, and the instruments that measure time and tokens in the real actor and observer."""
 from __future__ import annotations
 
+import asyncio
 import re
 import time
 from dataclasses import dataclass, field
@@ -54,18 +55,39 @@ class Meter:
     observer_calls: List[ObserverCall] = field(default_factory=list)
 
 
+class RateLimiter:
+    """Starts at most `per_minute` calls a minute, evenly spaced. The free Gemini tier allows 15 a minute for the whole project, chat included."""
+
+    def __init__(self, per_minute: float, clock=time.monotonic, sleep=asyncio.sleep) -> None:
+        self._interval = 60.0 / per_minute
+        self._clock, self._sleep = clock, sleep
+        self._next = 0.0
+        self._lock = asyncio.Lock()
+
+    async def wait(self) -> None:
+        async with self._lock:
+            now = self._clock()
+            delay = max(0.0, self._next - now)
+            self._next = max(now, self._next) + self._interval
+        if delay:
+            await self._sleep(delay)
+
+
 class MeteredActor(GeminiActor):
     """The real Gemini actor (with its retries), recording each successful call's time to first text, total time, and token use."""
 
-    def __init__(self, api_key: str, model: str, meter: Meter, system_override: Optional[str] = None, **kwargs) -> None:
+    def __init__(self, api_key: str, model: str, meter: Meter, system_override: Optional[str] = None, limiter: Optional[RateLimiter] = None, **kwargs) -> None:
         super().__init__(api_key, model, **kwargs)
         self.meter = meter
         self._system_override = system_override
+        self._limiter = limiter
 
     def _request(self, messages: List[Message], system: Optional[str] = None):
         return super()._request(messages, self._system_override or system)
 
     async def _chunks(self, contents, config) -> AsyncIterator:
+        if self._limiter:
+            await self._limiter.wait()                      # each attempt counts against the quota, retries included
         started = time.monotonic()
         first: Optional[float] = None
         last = None

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { isStreaming, type AssistantItem, type ChatState, type Item, type Review } from "./reducer";
 import { useChat } from "./useChat";
 
@@ -11,7 +11,7 @@ function Assistant({ item }: { item: AssistantItem }) {
   return (
     <div className={classes}>
       <div className="label">
-        {item.role === "correction" ? <Badge tone="correction">Correction</Badge> : "Actor"}
+        {item.role === "correction" ? <Badge tone="correction">Correction</Badge> : "Jaynes"}
         {item.contested && <Badge tone="contested">contested</Badge>}
         {item.interrupted && <Badge tone="error">interrupted</Badge>}
       </div>
@@ -112,16 +112,36 @@ function ObserverPanel({ state }: { state: ChatState }) {
 
 function Composer({ onSend, disabled }: { onSend: (text: string) => Promise<void>; disabled: boolean }) {
   const [text, setText] = useState("");
-  const submit = (event: FormEvent): void => {
-    event.preventDefault();
+  const send = (): void => {
     const trimmed = text.trim();
     if (!trimmed) return;
     setText("");
     void onSend(trimmed);
   };
+  const submit = (event: FormEvent): void => {
+    event.preventDefault();
+    send();
+  };
+  // Enter sends; Shift+Enter starts a new line. Enter while an input method is composing text (for example, picking a character) is left alone.
+  const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      send();
+    }
+  };
   return (
     <form className="composer" onSubmit={submit}>
-      <input value={text} onChange={(event) => setText(event.target.value)} placeholder="Message" aria-label="Message" maxLength={8000} disabled={disabled} autoFocus />
+      <textarea
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+        onKeyDown={onKeyDown}
+        placeholder="Message (Enter to send, Shift+Enter for a new line)"
+        aria-label="Message"
+        rows={3}
+        maxLength={8000}
+        disabled={disabled}
+        autoFocus
+      />
       <button type="submit" disabled={disabled || !text.trim()}>
         Send
       </button>

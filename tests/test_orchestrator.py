@@ -125,3 +125,8 @@ async def test_the_error_names_the_providers_status_code_but_nothing_else():
     await session.handle_user_message("hi")
     shown = session.log.replay()[-1].data["message"]
     assert shown == "ProviderError 503 UNAVAILABLE" and "secret-key-123" not in shown
+
+
+def test_the_actor_is_told_its_name():
+    from bicameral.actor import ACTOR_SYSTEM
+    assert ACTOR_SYSTEM.startswith("Your name is Jaynes.") and "do not claim to be human" in ACTOR_SYSTEM
