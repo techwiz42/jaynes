@@ -36,6 +36,14 @@ PLIST="$HOME/Library/LaunchAgents/local.jaynes.plist"
 mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
 sed "s|@HOME@|$HOME|g" "$HOME/jaynes/app/deploy/local.jaynes.plist" > "$PLIST"
 launchctl bootout "gui/$(id -u)/local.jaynes" 2>/dev/null || true
+for i in $(seq 1 20); do                  # unloading takes a moment; loading before it is done fails with "already loaded"
+  launchctl list | grep -q local.jaynes || break
+  sleep 1
+done
+for i in $(seq 1 15); do                  # and the old process must be gone, or it would answer in place of the new one
+  curl -s -m 1 http://127.0.0.1:8000/healthz >/dev/null 2>&1 || break
+  sleep 1
+done
 launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null || launchctl load -w "$PLIST"
 for i in $(seq 1 30); do
   if curl -s -m 2 http://127.0.0.1:8000/healthz | grep -q '"ok":true'; then echo "answering: $(git -C "$HOME/jaynes/app" log --oneline -1)"; exit 0; fi
