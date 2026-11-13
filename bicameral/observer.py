@@ -56,10 +56,16 @@ def parse_verdict(text: str) -> Verdict:
         raise ObserverError(f"the observer's answer could not be understood: {type(error).__name__}") from None
 
 
+# The model may think before it answers, and thinking counts against max_tokens: with a small limit it can run out while still thinking and never reach the JSON.
+MAX_OUTPUT_TOKENS = 4000
+
+
 class HaikuObserver:
-    def __init__(self, api_key: str, model: str, timeout_seconds: float = 30.0) -> None:
-        from anthropic import AsyncAnthropic
-        self._client = AsyncAnthropic(api_key=api_key)
+    def __init__(self, api_key: str, model: str, timeout_seconds: float = 30.0, client=None) -> None:
+        if client is None:
+            from anthropic import AsyncAnthropic
+            client = AsyncAnthropic(api_key=api_key)
+        self._client = client
         self._model = model
         self._timeout = timeout_seconds
 
@@ -67,7 +73,7 @@ class HaikuObserver:
         try:
             response = await asyncio.wait_for(
                 self._client.messages.create(
-                    model=self._model, max_tokens=600, system=OBSERVER_SYSTEM,
+                    model=self._model, max_tokens=MAX_OUTPUT_TOKENS, system=OBSERVER_SYSTEM,
                     messages=[{"role": "user", "content": render_transcript(transcript, draft)}],
                 ),
                 timeout=self._timeout,
@@ -77,4 +83,6 @@ class HaikuObserver:
         except Exception as error:                      # network, auth, rate limit: the review did not happen
             raise ObserverError(f"the observer could not be reached: {type(error).__name__}") from None
         text = "".join(block.text for block in response.content if getattr(block, "type", "") == "text")
+        if not text.strip() and getattr(response, "stop_reason", None) == "max_tokens":
+            raise ObserverError("the observer ran out of room before it answered")
         return parse_verdict(text)
