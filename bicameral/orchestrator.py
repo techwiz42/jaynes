@@ -1,0 +1,91 @@
+"""One conversation: the turn lock, the streamed draft, the review, and at most one correction."""
+from __future__ import annotations
+
+import asyncio
+from typing import List
+
+from .actor import ACTOR_SYSTEM, Actor, ActorError, Message
+from .events import EventLog
+from .observer import Observer, ObserverError, Verdict
+
+INTERNAL_NOTE_LABEL = "[Internal note from the observer, not from the user]"
+
+
+def internal_note(verdict: Verdict) -> str:
+    issues = "\n".join(f"- {issue}" for issue in verdict.issues) or "- (none listed)"
+    return (f"{INTERNAL_NOTE_LABEL}\nYour previous reply was retracted.\nIssues:\n{issues}\n"
+            f"Guidance: {verdict.correction_guidance or '(none)'}\nWrite one corrected reply to the user's last message.")
+
+
+class Session:
+    def __init__(self, session_id: str, actor: Actor, observer: Observer) -> None:
+        self.id = session_id
+        self.actor = actor
+        self.observer = observer
+        self.log = EventLog()
+        self.history: List[Message] = []
+        self._lock = asyncio.Lock()
+        self._message_count = 0
+
+    @property
+    def busy(self) -> bool:
+        return self._lock.locked()
+
+    def _new_message_id(self) -> str:
+        self._message_count += 1
+        return f"m{self._message_count}"
+
+    async def _stream(self, kind: str, message_id: str, **extra: str) -> str:
+        parts: List[str] = []
+        async for chunk in self.actor.stream(list(self.history), system=ACTOR_SYSTEM):
+            if chunk:
+                parts.append(chunk)
+                self.log.append("token", message_id=message_id, kind=kind, text=chunk, **extra)
+        text = "".join(parts)
+        if not text.strip():
+            raise ActorError("the actor returned an empty reply")
+        return text
+
+    async def handle_user_message(self, text: str) -> None:
+        """One turn. Turns are serialised: a second message waits for the first to finish."""
+        async with self._lock:
+            self.history.append({"role": "user", "content": text})
+            self.log.append("user_message", text=text)
+
+            draft_id = self._new_message_id()
+            try:
+                draft = await self._stream("draft", draft_id)
+            except Exception as error:
+                self.history.pop()                                   # the user turn went unanswered
+                self.log.append("error", where="actor", message=_describe(error))
+                return
+            self.log.append("draft_complete", message_id=draft_id, text=draft)
+            self.history.append({"role": "assistant", "content": draft})
+
+            try:
+                verdict = await self.observer.review(self.history[:-1], draft)
+            except Exception as error:                               # never treat a failed review as ok
+                self.log.append("error", where="observer", message=_describe(error))
+                return
+            self.log.append("observer_verdict", message_id=draft_id, **verdict.model_dump())
+            if verdict.verdict != "retract":
+                return
+
+            self.log.append("retraction", message_id=draft_id, issues=verdict.issues, text=draft)
+            self.history.append({"role": "user", "content": internal_note(verdict)})
+            correction_id = self._new_message_id()
+            try:
+                correction = await self._stream("correction", correction_id, corrects=draft_id)
+            except Exception as error:
+                self.history.pop()                                   # drop the note; the correction never happened
+                self.log.append("error", where="actor_correction", message=_describe(error))
+                return
+            self.log.append("draft_complete", message_id=correction_id, text=correction)
+            self.history.append({"role": "assistant", "content": correction})      # corrections are not reviewed
+
+
+def _describe(error: Exception) -> str:
+    """A message for the user: what kind of failure, never a key or a request body."""
+    if isinstance(error, (ActorError, ObserverError)):
+        return str(error)
+    return f"{type(error).__name__}"

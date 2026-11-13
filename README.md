@@ -9,7 +9,32 @@ The design is **stream-and-retract**. The user sees the actor's reply as it stre
 
 ## Status
 
-Design stage. The design brief is [`docs/design.md`](docs/design.md) and the plan for running it is [`docs/run-plan.md`](docs/run-plan.md). No code yet and nothing is deployed.
+The backend is written and tested (no network needed). The frontend (`web/`) and the deployment to melville are not built yet. The design brief is [`docs/design.md`](docs/design.md) and the plan for running it is [`docs/run-plan.md`](docs/run-plan.md).
+
+## Setup and run
+
+Python 3.11 or newer.
+
+```
+python3 -m venv .venv
+.venv/bin/pip install -e ".[dev]"
+.venv/bin/pytest                      # no network, no keys
+
+export GEMINI_API_KEY=...             # GOOGLE_API_KEY also works
+export ANTHROPIC_API_KEY=...
+.venv/bin/uvicorn bicameral.server:app --reload
+```
+
+The server refuses to start if a key is missing, and says which. It listens on `127.0.0.1:8000`. Try it by hand:
+
+```
+curl -s -X POST localhost:8000/sessions                                   # {"session_id": "..."}
+curl -N localhost:8000/sessions/<id>/events                               # leave this open in one terminal
+curl -s -X POST localhost:8000/sessions/<id>/messages \
+     -H 'content-type: application/json' -d '{"text": "Hello"}'          # 202; the events stream in the other terminal
+```
+
+Add `?after=<event id>` (or a `Last-Event-ID` header) to the events URL to resume after a dropped connection. `GET /healthz` reports the number of sessions and turns in progress.
 
 ## How a turn works
 
@@ -53,11 +78,11 @@ There is no authentication, and none is planned for the first version, so **the 
 - Authentication, persistence beyond process memory, multi-user support.
 - Retrieval or a vector store.
 
-## Layout (planned)
+## Layout
 
 ```
 bicameral/     backend package: config, events, actor, observer, orchestrator, server
-web/           Vite + React + TypeScript app
+web/           Vite + React + TypeScript app (not built yet)
 tests/         pytest, no network (fake actor and observer)
 docs/          design brief and run plan
 scripts/       deploy script
