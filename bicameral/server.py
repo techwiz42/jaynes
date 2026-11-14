@@ -29,6 +29,17 @@ KEEPALIVE_SECONDS = 15.0
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
 
 
+class WebFiles(StaticFiles):
+    """The built frontend, with caching that makes a deploy show up on a plain reload: the page is re-checked every time, and the hashed files under /assets (whose names change
+    whenever their content does) are kept for a year."""
+
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        if response.status_code == 200:
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable" if path.startswith("assets/") else "no-cache"
+        return response
+
+
 class MessageIn(BaseModel):
     text: str = Field(min_length=1, max_length=8000)
 
@@ -95,7 +106,7 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
         return {"ok": True, "sessions": len(sessions), "turns_in_progress": sum(1 for s in sessions.values() if s.busy)}
 
     if WEB_DIST.is_dir():                         # the built frontend, when there is one
-        app.mount("/", StaticFiles(directory=WEB_DIST, html=True), name="web")
+        app.mount("/", WebFiles(directory=WEB_DIST, html=True), name="web")
     return app
 
 
