@@ -37,6 +37,7 @@ class Settings:
     docs_dir: str = ""                              # DOCS_DIR: Markdown and text files for retrieve_docs
     private_terms: Tuple[str, ...] = ()             # PRIVATE_TERMS: never sent to a search provider or in a fetched URL
     max_tool_calls_per_turn: int = 5                # MAX_TOOL_CALLS_PER_TURN
+    max_revisions: int = 5                          # MAX_REVISIONS: corrections per turn before giving up
     allow_private_egress: bool = False              # ALLOW_PRIVATE_EGRESS=1: private repository and document content may go to the model providers (see README)
     audit_log: str = "audit.jsonl"                  # AUDIT_LOG: where every tool call is recorded (never the contents)
     google_client_id: str = ""                      # GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN: read-only Gmail and Drive (scripts/google-auth.py sets them up)
@@ -70,6 +71,9 @@ class Settings:
         raw_calls = (env.get("MAX_TOOL_CALLS_PER_TURN") or "").strip() or "5"
         if not raw_calls.isdigit() or not 0 <= int(raw_calls) <= 20:
             raise ConfigError("MAX_TOOL_CALLS_PER_TURN must be a whole number from 0 to 20")
+        raw_revisions = (env.get("MAX_REVISIONS") or "").strip() or "5"
+        if not raw_revisions.isdigit() or not 1 <= int(raw_revisions) <= 10:
+            raise ConfigError("MAX_REVISIONS must be a whole number from 1 to 10")
         repos = _list(env.get("GITHUB_REPO_ALLOWLIST"))
         for repo in repos:
             if repo.count("/") != 1 or not all(repo.split("/")):
@@ -87,6 +91,7 @@ class Settings:
             docs_dir=(env.get("DOCS_DIR") or "").strip(),
             private_terms=_list(env.get("PRIVATE_TERMS")),
             max_tool_calls_per_turn=int(raw_calls),
+            max_revisions=int(raw_revisions),
             allow_private_egress=_flag(env.get("ALLOW_PRIVATE_EGRESS")),
             audit_log=(env.get("AUDIT_LOG") or "audit.jsonl").strip(),
             google_client_id=(env.get("GOOGLE_CLIENT_ID") or "").strip(),

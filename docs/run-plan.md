@@ -89,7 +89,7 @@ No server cost. Only model usage:
 ## Verification
 
 - `/healthz` answers through the forward; the app does not answer on melville's network address.
-- A message streams a reply immediately; a retracted draft is marked contested and one correction follows.
+- A message streams a reply immediately; a retracted draft is marked contested and a correction follows, which is reviewed in turn.
 - Reconnecting the event stream mid-turn loses and duplicates nothing.
 - The deploy script refuses to restart during a turn, and rolls back with an older commit.
 - The service comes back after melville restarts or the server crashes.

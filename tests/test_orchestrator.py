@@ -27,11 +27,11 @@ async def test_tokens_are_drafts_with_one_message_id():
     assert len({t.data["message_id"] for t in tokens}) == 1
 
 
-async def test_a_retracted_turn_gets_exactly_one_correction():
+async def test_a_retracted_draft_is_corrected_and_the_correction_is_reviewed():
     actor = FakeActor("wrong", "right")
-    session = Session("s", actor, FakeObserver(RETRACT))
+    session = Session("s", actor, FakeObserver(RETRACT, OK))
     await session.handle_user_message("when?")
-    assert types(session) == ["user_message", "token", "draft_complete", "observer_verdict", "retraction", "token", "draft_complete"]
+    assert types(session) == ["user_message", "token", "draft_complete", "observer_verdict", "retraction", "token", "draft_complete", "observer_verdict"]
     retraction = session.log.replay()[4]
     assert retraction.data["text"] == "wrong" and retraction.data["issues"] == ["states a wrong date"]
     correction = session.log.replay()[5]
@@ -41,7 +41,7 @@ async def test_a_retracted_turn_gets_exactly_one_correction():
 
 async def test_the_internal_note_is_labelled_and_reaches_the_actor():
     actor = FakeActor("wrong", "right")
-    session = Session("s", actor, FakeObserver(RETRACT))
+    session = Session("s", actor, FakeObserver(RETRACT, OK))
     await session.handle_user_message("when?")
     last_call = actor.calls[1]
     assert last_call[-1]["role"] == "user" and last_call[-1]["content"].startswith(INTERNAL_NOTE_LABEL)
@@ -49,12 +49,38 @@ async def test_the_internal_note_is_labelled_and_reaches_the_actor():
     assert [m["role"] for m in session.history] == ["user", "assistant", "user", "assistant"]
 
 
-async def test_a_correction_is_not_itself_reviewed():
-    observer = FakeObserver(RETRACT)                      # a second verdict is not available: a second review would fail the test
+async def test_it_loops_until_the_observer_approves():
+    observer = FakeObserver(RETRACT, RETRACT, OK)
+    actor = FakeActor("one", "two", "three")
+    session = Session("s", actor, observer)
+    await session.handle_user_message("when?")
+    assert [r[1] for r in observer.reviews] == ["one", "two", "three"]
+    corrections = [e for e in session.log.replay() if e.type == "token" and e.data["kind"] == "correction"]
+    assert [c.data["corrects"] for c in corrections] == ["m1", "m2"]
+    assert session.log.replay()[-1].type == "observer_verdict" and session.log.replay()[-1].data["verdict"] == "ok"
+    assert "error" not in types(session)
+
+
+async def test_the_observer_reads_the_conversation_not_the_retracted_drafts_or_notes():
+    observer = FakeObserver(RETRACT, OK)
     session = Session("s", FakeActor("wrong", "right"), observer)
     await session.handle_user_message("when?")
-    assert len(observer.reviews) == 1
-    assert "observer_verdict" not in types(session)[types(session).index("draft_complete", 3):]
+    assert [m["content"] for m in observer.reviews[1][0]] == ["when?"]
+
+
+async def test_it_gives_up_after_the_cap_and_says_so():
+    observer = FakeObserver(RETRACT, RETRACT, RETRACT)
+    session = Session("s", FakeActor("one", "two", "three"), observer, max_revisions=2)
+    await session.handle_user_message("when?")
+    last = session.log.replay()[-1]
+    assert last.type == "error" and last.data["where"] == "observer" and "2 corrections" in last.data["message"]
+    assert len(observer.reviews) == 3 and types(session).count("retraction") == 3
+
+
+async def test_an_observer_failure_during_a_correction_review_stops_the_loop():
+    session = Session("s", FakeActor("wrong", "right"), FakeObserver(RETRACT, BROKEN))
+    await session.handle_user_message("when?")
+    assert session.log.replay()[-1].data["where"] == "observer"
 
 
 async def test_the_observer_sees_the_transcript_without_the_draft():

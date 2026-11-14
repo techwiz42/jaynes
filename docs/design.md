@@ -20,13 +20,13 @@ A chat application where the **actor** (Gemini) talks to the user and the **obse
 4. Send the transcript (excluding the draft under review) plus the draft to the observer.
 5. Emit `observer_verdict`.
 6. On `retract`, emit `retraction` (issues and the retracted text), append an internal note (labelled internal, not from the user) with the issues and guidance, and stream a correction with `kind="correction"`.
-7. Exactly one correction per turn. Corrections are not reviewed.
+7. Review and correct in a loop until the observer approves. Every correction is reviewed like a draft; the observer reads the conversation, never the retracted drafts or the internal notes. `MAX_REVISIONS` (default 5) caps the corrections per turn: when the cap is reached the turn ends with an `error` (where "observer") and the last reply stays marked contested.
 8. On failure emit `error` with `where` = `actor`, `observer` or `actor_correction`. A failed review is never `ok`.
 
 ## Backend work
 
 - The brief mentions an existing scaffold; none exists. Write it: `config.py`, `events.py` (append-only log with replay and live fan-out), `actor.py`, `observer.py` (returns a verdict, never fails open), `orchestrator.py`, `server.py`.
-- pytest with no network, using fake actor and observer objects (`stream(messages, system=...)`, `review(transcript, draft)`): clean turn, retracted turn with exactly one correction, correction not reviewed, observer parse failure emits `error` and does not retract, actor failure pops the unanswered user turn, event log replays from `after`.
+- pytest with no network, using fake actor and observer objects (`stream(messages, system=...)`, `review(transcript, draft)`): clean turn, retracted turn corrected and the correction reviewed, loop until approval, cap reached, observer failure mid-loop, observer parse failure emits `error` and does not retract, actor failure pops the unanswered user turn, event log replays from `after`.
 - Verify SDK usage against current docs (`client.aio.models.generate_content_stream`, async `messages.create`).
 - README with setup and run (`uvicorn bicameral.server:app --reload`); `.env.example`.
 
@@ -43,7 +43,7 @@ Vite + React + TypeScript in `web/`.
 ## Acceptance criteria
 
 - `pytest` passes with no network; `npm test` passes in `web/`.
-- With real keys, a reply streams immediately; a retraction marks the reply contested and one correction appears.
+- With real keys, a reply streams immediately; a retraction marks the reply contested and a correction appears, which is itself reviewed.
 - Reconnecting the event stream mid-turn does not duplicate or drop events.
 - No API key in the repository.
 

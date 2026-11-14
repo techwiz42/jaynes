@@ -1,4 +1,4 @@
-"""One conversation: the turn lock, the streamed draft, the review, and at most one correction."""
+"""One conversation: the turn lock, the streamed draft, and the review-and-correct loop that runs until the observer approves."""
 from __future__ import annotations
 
 import asyncio
@@ -22,11 +22,12 @@ def internal_note(verdict: Verdict) -> str:
 
 
 class Session:
-    def __init__(self, session_id: str, actor: Actor, observer: Observer, max_tool_calls: int = 5) -> None:
+    def __init__(self, session_id: str, actor: Actor, observer: Observer, max_tool_calls: int = 5, max_revisions: int = 5) -> None:
         self.id = session_id
         self.actor = actor
         self.observer = observer
         self.max_tool_calls = max_tool_calls
+        self.max_revisions = max_revisions                    # corrections allowed per turn; a backstop against an endless disagreement
         self._turn_count = 0
         self._turn: Optional[TurnContext] = None
         self.taint = Taint()                                  # lasts as long as the conversation
@@ -77,31 +78,38 @@ class Session:
                 self.log.append("error", where="actor", message=_describe(error))
                 return
             self.log.append("draft_complete", message_id=draft_id, text=draft)
+            reviewed = list(self.history)                            # what the observer reads: the conversation, never the retracted drafts or the notes
             self.history.append({"role": "assistant", "content": draft})
 
-            try:
-                trace = list(self._turn.trace) if self._turn else []
-                verdict = await (self.observer.review(self.history[:-1], draft, trace=trace) if trace else self.observer.review(self.history[:-1], draft))
-            except Exception as error:                               # never treat a failed review as ok
-                _log_failure("observer", error)
-                self.log.append("error", where="observer", message=_describe(error))
-                return
-            self.log.append("observer_verdict", message_id=draft_id, **verdict.model_dump())
-            if verdict.verdict != "retract":
-                return
+            message_id = draft_id
+            for revision in range(self.max_revisions + 1):
+                try:
+                    trace = list(self._turn.trace) if self._turn else []
+                    verdict = await (self.observer.review(reviewed, draft, trace=trace) if trace else self.observer.review(reviewed, draft))
+                except Exception as error:                           # never treat a failed review as ok
+                    _log_failure("observer", error)
+                    self.log.append("error", where="observer", message=_describe(error))
+                    return
+                self.log.append("observer_verdict", message_id=message_id, **verdict.model_dump())
+                if verdict.verdict != "retract":
+                    return
+                self.log.append("retraction", message_id=message_id, issues=verdict.issues, text=draft)
+                if revision == self.max_revisions:
+                    self.log.append("error", where="observer", message=f"the observer still did not approve the reply after {self.max_revisions} corrections")
+                    return
 
-            self.log.append("retraction", message_id=draft_id, issues=verdict.issues, text=draft)
-            self.history.append({"role": "user", "content": internal_note(verdict)})
-            correction_id = self._new_message_id()
-            try:
-                correction = await self._stream("correction", correction_id, corrects=draft_id)
-            except Exception as error:
-                self.history.pop()                                   # drop the note; the correction never happened
-                _log_failure("actor_correction", error)
-                self.log.append("error", where="actor_correction", message=_describe(error))
-                return
-            self.log.append("draft_complete", message_id=correction_id, text=correction)
-            self.history.append({"role": "assistant", "content": correction})      # corrections are not reviewed
+                self.history.append({"role": "user", "content": internal_note(verdict)})
+                correction_id = self._new_message_id()
+                try:
+                    draft = await self._stream("correction", correction_id, corrects=message_id)
+                except Exception as error:
+                    self.history.pop()                               # drop the note; the correction never happened
+                    _log_failure("actor_correction", error)
+                    self.log.append("error", where="actor_correction", message=_describe(error))
+                    return
+                self.log.append("draft_complete", message_id=correction_id, text=draft)
+                self.history.append({"role": "assistant", "content": draft})
+                message_id = correction_id
 
 
 def _describe(error: Exception) -> str:

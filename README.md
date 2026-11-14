@@ -5,7 +5,7 @@ A two-agent chat, named after Julian Jaynes' bicameral mind: one agent acts, the
 - **The actor** (Gemini) talks to the user and produces replies.
 - **The observer** (Claude Haiku) reviews each finished reply and can **retract** it.
 
-The design is **stream-and-retract**. The user sees the actor's reply as it streams, so a retraction is a correction after the fact, not a gate before delivery. When the observer retracts, the draft stays visible, marked as contested, and the actor follows it with exactly one correction. Corrections are not reviewed, so there is no review loop.
+The design is **stream-and-retract**. The user sees the actor's reply as it streams, so a retraction is a correction after the fact, not a gate before delivery. When the observer retracts, the draft stays visible, marked as contested, and the actor follows it with a correction, and the observer reviews that too. This repeats until the observer approves; `MAX_REVISIONS` (default 5) stops an endless disagreement, and the turn then ends with an error rather than passing the reply off as approved.
 
 ## Status
 
@@ -75,7 +75,7 @@ Paste only the key value at the prompts, not a `NAME=value` line. A deploy refus
 1. The user's message is added to the session. Turns are serialised by a per-session lock.
 2. The actor's reply streams to the browser, token by token, as a *draft*.
 3. When the draft is complete, the observer reads the transcript (without the draft) and the draft, and returns a verdict: `ok` or `retract`, with severity, issues and guidance for a correction.
-4. On `retract`, the draft is marked contested, a note with the issues goes into the actor's history as an internal note (not from the user), and the actor streams one correction.
+4. On `retract`, the draft is marked contested, a note with the issues goes into the actor's history as an internal note (not from the user), and the actor streams a correction, which goes back to the observer. The loop ends on `ok`, on an error, or at `MAX_REVISIONS` corrections.
 5. If the actor or the observer fails, the user sees an `error` event saying which one. A failed review is never treated as `ok`.
 
 ## Planned stack

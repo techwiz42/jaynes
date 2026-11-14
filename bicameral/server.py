@@ -63,6 +63,7 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
             registry, notes = await build_registry(settings)
             app.state.tool_notes = notes
             app.state.max_tool_calls = settings.max_tool_calls_per_turn
+            app.state.max_revisions = settings.max_revisions
             app.state.tools = registry.names
             app.state.actor = app.state.actor or GeminiActor(settings.gemini_api_key, settings.actor_model, registry=registry)
             app.state.observer = app.state.observer or HaikuObserver(settings.anthropic_api_key, settings.observer_model, settings.observer_timeout_seconds)
@@ -76,6 +77,7 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
     app.state.tools = []
     app.state.tool_notes = []
     app.state.max_tool_calls = 5
+    app.state.max_revisions = 5
     app.state.sessions = sessions
 
     def find(session_id: str) -> Session:
@@ -87,7 +89,7 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
     @app.post("/sessions")
     async def new_session() -> Dict[str, str]:
         session_id = uuid.uuid4().hex
-        sessions[session_id] = Session(session_id, app.state.actor, app.state.observer, app.state.max_tool_calls)
+        sessions[session_id] = Session(session_id, app.state.actor, app.state.observer, app.state.max_tool_calls, app.state.max_revisions)
         return {"session_id": session_id}
 
     @app.post("/sessions/{session_id}/messages", status_code=202)

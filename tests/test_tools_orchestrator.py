@@ -67,10 +67,10 @@ async def test_each_turn_gets_its_own_id_and_a_fresh_budget_and_trace():
 
 async def test_a_correction_shares_the_turn_and_its_tool_events_are_logged_too():
     actor = ToolActor(["wrong"], [ToolCallEvent("c1", "web_fetch", {"url": "https://x.example"}), ToolResultEvent("c1", "web_fetch", True, "read x.example", False), "right"])
-    session = Session("s", actor, FakeObserver(RETRACT))
+    session = Session("s", actor, FakeObserver(RETRACT, OK))
     await session.handle_user_message("q")
     assert actor.turns[0] is actor.turns[1]
-    assert [e.type for e in session.log.replay()][-4:] == ["tool_call", "tool_result", "token", "draft_complete"]
+    assert [e.type for e in session.log.replay()][-5:] == ["tool_call", "tool_result", "token", "draft_complete", "observer_verdict"]
 
 
 async def test_an_actor_without_tools_is_not_given_a_turn():
