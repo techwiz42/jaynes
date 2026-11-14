@@ -33,9 +33,11 @@ class FakeObserver:
     def __init__(self, *verdicts) -> None:
         self.verdicts = list(verdicts)
         self.reviews: List[tuple] = []
+        self.traces: list = []
 
-    async def review(self, transcript, draft) -> Verdict:
+    async def review(self, transcript, draft, trace=None) -> Verdict:
         self.reviews.append(([dict(m) for m in transcript], draft))
+        self.traces.append(trace)
         verdict = self.verdicts.pop(0)
         if isinstance(verdict, Exception):
             raise verdict

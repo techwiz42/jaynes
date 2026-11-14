@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { MarkdownText, plainText } from "./Markdown";
-import { isStreaming, type AssistantItem, type ChatState, type Item, type Review } from "./reducer";
+import { isStreaming, type AssistantItem, type ChatState, type Item, type Review, type ToolItem } from "./reducer";
 import { useChat } from "./useChat";
 
 function Badge({ children, tone }: { children: string; tone: "contested" | "correction" | "error" | "ok" }) {
@@ -28,7 +28,23 @@ function Assistant({ item }: { item: AssistantItem }) {
   );
 }
 
+function ToolBadge({ item }: { item: ToolItem }) {
+  const mark = item.status === "running" ? "…" : item.status === "ok" ? "✓" : "✗";
+  return (
+    <div className={`tool ${item.status}`} title={item.summary || item.target}>
+      <span className="tool-mark" aria-hidden="true">
+        {mark}
+      </span>
+      <span className="tool-name">{item.tool}</span>
+      {item.target && <span className="tool-target">{item.target}</span>}
+      {item.summary && <span className="tool-summary">{item.summary}</span>}
+      {item.truncated && <span className="tool-cut">truncated</span>}
+    </div>
+  );
+}
+
 function Row({ item }: { item: Item }) {
+  if (item.kind === "tool") return <ToolBadge item={item} />;
   if (item.kind === "user") {
     return (
       <div className="message user">

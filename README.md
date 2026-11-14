@@ -101,16 +101,19 @@ Keys come from the environment and never go in this repository. A `.env.example`
 | `ANTHROPIC_API_KEY` | Observer |
 | `ACTOR_MODEL`, `OBSERVER_MODEL` | Optional model overrides |
 
+## Tools
+
+The actor can use read-only tools: `web_fetch`, `web_search` (Tavily), `python_sandbox`, `retrieve_docs` (your Markdown files) and `github_read` (allowlisted private repositories). Each is off unless its configuration is set, and the two that read private content also need `ALLOW_PRIVATE_EGRESS=1`, because their results go to Google and Anthropic. Tool calls appear as small badges in the conversation, and the observer is shown the full tool trace so it can check the draft against what the tools returned. See [`docs/tools.md`](docs/tools.md) for the configuration, the data-egress decision, the defences (private-content guard, prompt-injection handling, SSRF protection, audit log) and the sandbox's limits.
+
 ## Access and limits
 
 There is no authentication, and none is planned for the first version, so **the service must not be reachable from the internet**. It runs on a machine on the local network and is used through an SSH port-forward (see the run plan). Because it is private, there are no rate limits or spend ceiling in the app; set budget alerts with the model providers instead.
 
 ## Out of scope for now
 
-- Actor tools and function calling (the observer sees text only).
 - Blocking a reply before delivery (hold-and-release).
 - Authentication, persistence beyond process memory, multi-user support.
-- Retrieval or a vector store.
+- A vector store or embeddings (`retrieve_docs` is a local keyword index).
 
 ## Layout
 

@@ -58,8 +58,13 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
         if app.state.actor is None or app.state.observer is None:
             from .actor import GeminiActor
             from .observer import HaikuObserver
+            from .tools import build_registry
             settings = Settings.from_env()
-            app.state.actor = app.state.actor or GeminiActor(settings.gemini_api_key, settings.actor_model)
+            registry, notes = await build_registry(settings)
+            app.state.tool_notes = notes
+            app.state.max_tool_calls = settings.max_tool_calls_per_turn
+            app.state.tools = registry.names
+            app.state.actor = app.state.actor or GeminiActor(settings.gemini_api_key, settings.actor_model, registry=registry)
             app.state.observer = app.state.observer or HaikuObserver(settings.anthropic_api_key, settings.observer_model, settings.observer_timeout_seconds)
         yield
         for session in sessions.values():
@@ -68,6 +73,8 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
     app = FastAPI(title="jaynes", lifespan=lifespan)
     app.state.actor = actor
     app.state.observer = observer
+    app.state.tools = []
+    app.state.max_tool_calls = 5
     app.state.sessions = sessions
 
     def find(session_id: str) -> Session:
@@ -79,7 +86,7 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
     @app.post("/sessions")
     async def new_session() -> Dict[str, str]:
         session_id = uuid.uuid4().hex
-        sessions[session_id] = Session(session_id, app.state.actor, app.state.observer)
+        sessions[session_id] = Session(session_id, app.state.actor, app.state.observer, app.state.max_tool_calls)
         return {"session_id": session_id}
 
     @app.post("/sessions/{session_id}/messages", status_code=202)
@@ -103,7 +110,7 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
 
     @app.get("/healthz")
     async def healthz() -> Dict[str, object]:
-        return {"ok": True, "sessions": len(sessions), "turns_in_progress": sum(1 for s in sessions.values() if s.busy)}
+        return {"ok": True, "sessions": len(sessions), "turns_in_progress": sum(1 for s in sessions.values() if s.busy), "tools": app.state.tools}
 
     if WEB_DIST.is_dir():                         # the built frontend, when there is one
         app.mount("/", WebFiles(directory=WEB_DIST, html=True), name="web")

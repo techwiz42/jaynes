@@ -11,3 +11,5 @@ web/dist/
 .pytest_cache/
 *.egg-info/
 experiments/results/
+audit.jsonl
+*.jsonl

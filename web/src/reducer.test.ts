@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatEvent } from "./events";
-import { initialState, isStreaming, reduce, reviewOf, type AssistantItem, type ChatState } from "./reducer";
+import { describeTarget, initialState, isStreaming, reduce, reviewOf, type AssistantItem, type ChatState } from "./reducer";
 
 let counter = 0;
 const id = (): number => ++counter;
@@ -122,5 +122,48 @@ describe("errors", () => {
     ]);
     expect(state.items.map((item) => item.kind)).toEqual(["assistant", "error"]);
     expect(assistants(state)[0]).toMatchObject({ contested: true });
+  });
+});
+
+describe("tool calls", () => {
+  const call = (call_id: string, tool: string, args: Record<string, unknown>, turn_id = "t1"): ChatEvent => ({ id: id(), type: "tool_call", turn_id, call_id, tool, args });
+  const result = (call_id: string, tool: string, ok: boolean, summary: string, truncated = false, turn_id = "t1"): ChatEvent => ({
+    id: id(), type: "tool_result", turn_id, call_id, tool, ok, summary, truncated,
+  });
+  const tools = (state: ChatState) => state.items.filter((item) => item.kind === "tool");
+
+  it("shows a call as running and then fills in its result", () => {
+    let state = run([user("check the repo"), call("c1", "github_read", { operation: "read_file", repo: "acme/app", path: "src/a.py" })]);
+    expect(tools(state)[0]).toMatchObject({ tool: "github_read", status: "running", target: "acme/app · src/a.py" });
+    state = run([result("c1", "github_read", true, "read src/a.py (40 lines)")], state);
+    expect(tools(state)[0]).toMatchObject({ status: "ok", summary: "read src/a.py (40 lines)", truncated: false });
+  });
+
+  it("marks a failed call and a truncated one", () => {
+    const state = run([call("c1", "web_fetch", { url: "https://x.example/page" }), result("c1", "web_fetch", false, "refused: private address"), call("c2", "web_fetch", { url: "https://y.example" }), result("c2", "web_fetch", true, "read y.example", true)]);
+    expect(tools(state).map((t) => [t.status, t.truncated])).toEqual([["failed", false], ["ok", true]]);
+  });
+
+  it("places the badges inline, between the question and the reply", () => {
+    const state = run([user("q"), call("c1", "web_search", { query: "bicameral" }), result("c1", "web_search", true, "5 results"), token("m1", "Answer."), complete("m1", "Answer.")]);
+    expect(state.items.map((i) => i.kind)).toEqual(["user", "tool", "assistant"]);
+  });
+
+  it("keeps calls with the same id in different turns apart", () => {
+    const state = run([call("c1", "echo", {}, "t1"), result("c1", "echo", true, "one", false, "t1"), call("c1", "echo", {}, "t2"), result("c1", "echo", false, "two", false, "t2")]);
+    expect(tools(state).map((t) => [t.turnId, t.status, t.summary])).toEqual([["t1", "ok", "one"], ["t2", "failed", "two"]]);
+  });
+
+  it("ignores a result whose call it has not seen, and a replayed event", () => {
+    const stray = run([result("c9", "echo", true, "orphan")]);
+    expect(tools(stray)).toHaveLength(0);
+    const once = run([call("c1", "echo", {})]);
+    expect(run([once.lastEventId ? ({ id: once.lastEventId, type: "tool_call", turn_id: "t1", call_id: "c1", tool: "echo", args: {} } as ChatEvent) : user("x")], once)).toBe(once);
+  });
+
+  it("describes a target briefly and never shows more than the first line of code", () => {
+    expect(describeTarget({ code: "x = 1\nprint(secret)\n" })).toBe("x = 1");
+    expect(describeTarget({ url: "https://example.com/" + "a".repeat(100) }).length).toBeLessThanOrEqual(71);
+    expect(describeTarget({})).toBe("");
   });
 });

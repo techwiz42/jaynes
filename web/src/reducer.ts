@@ -21,6 +21,19 @@ export interface AssistantItem {
   corrects?: string;
 }
 
+export interface ToolItem {
+  kind: "tool";
+  key: string;
+  callId: string;
+  turnId: string;
+  tool: string;
+  /** A short description of what was asked for, from the arguments. */
+  target: string;
+  status: "running" | "ok" | "failed";
+  summary: string;
+  truncated: boolean;
+}
+
 export interface ErrorItem {
   kind: "error";
   key: string;
@@ -28,7 +41,7 @@ export interface ErrorItem {
   message: string;
 }
 
-export type Item = UserItem | AssistantItem | ErrorItem;
+export type Item = UserItem | AssistantItem | ToolItem | ErrorItem;
 
 export interface Review {
   messageId: string;
@@ -46,6 +59,23 @@ export interface ChatState {
 }
 
 export const initialState: ChatState = { items: [], reviews: [], lastEventId: 0 };
+
+const TARGET_KEYS = ["url", "query", "repo", "path", "operation", "code"];
+
+/** What a call was about, in a few words: the first argument that names something. Code is shown as just its first line. */
+export function describeTarget(args: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const key of TARGET_KEYS) {
+    const value = args[key];
+    if (typeof value === "string" && value) {
+      const line = value.split("\n")[0] ?? "";
+      parts.push(key === "repo" || key === "operation" ? value : line);
+      if (parts.length === 2) break;
+    }
+  }
+  const text = parts.join(" · ");
+  return text.length > 70 ? `${text.slice(0, 70)}…` : text;
+}
 
 function updateAssistant(items: Item[], messageId: string, change: (item: AssistantItem) => AssistantItem): Item[] {
   return items.map((item) => (item.kind === "assistant" && item.messageId === messageId ? change(item) : item));
@@ -120,6 +150,33 @@ export function reduce(state: ChatState, event: ChatEvent): ChatState {
           contested: true,
           retractionIssues: event.issues,
         })),
+      });
+
+    case "tool_call":
+      return next({
+        items: [
+          ...state.items,
+          {
+            kind: "tool",
+            key: `${event.turn_id}-${event.call_id}`,
+            callId: event.call_id,
+            turnId: event.turn_id,
+            tool: event.tool,
+            target: describeTarget(event.args),
+            status: "running",
+            summary: "",
+            truncated: false,
+          },
+        ],
+      });
+
+    case "tool_result":
+      return next({
+        items: state.items.map((item) =>
+          item.kind === "tool" && item.turnId === event.turn_id && item.callId === event.call_id
+            ? { ...item, status: event.ok ? "ok" : "failed", summary: event.summary, truncated: event.truncated }
+            : item,
+        ),
       });
 
     case "error": {

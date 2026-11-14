@@ -45,6 +45,28 @@ export interface RetractionEvent {
   text: string;
 }
 
+export interface ToolCallEvent {
+  id: number;
+  type: "tool_call";
+  turn_id: string;
+  call_id: string;
+  tool: string;
+  /** The arguments, with secrets removed. */
+  args: Record<string, unknown>;
+}
+
+export interface ToolResultEvent {
+  id: number;
+  type: "tool_result";
+  turn_id: string;
+  call_id: string;
+  tool: string;
+  ok: boolean;
+  /** One short line about what happened. Never the output itself, which can be private. */
+  summary: string;
+  truncated: boolean;
+}
+
 export interface ErrorEvent {
   id: number;
   type: "error";
@@ -58,6 +80,8 @@ export type ChatEvent =
   | DraftCompleteEvent
   | ObserverVerdictEvent
   | RetractionEvent
+  | ToolCallEvent
+  | ToolResultEvent
   | ErrorEvent;
 
 export type EventType = ChatEvent["type"];
@@ -68,6 +92,8 @@ export const EVENT_TYPES: readonly EventType[] = [
   "draft_complete",
   "observer_verdict",
   "retraction",
+  "tool_call",
+  "tool_result",
   "error",
 ];
 

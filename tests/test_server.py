@@ -76,4 +76,4 @@ async def test_healthz_counts_sessions_and_turns():
     app, http = client(FakeActor(), FakeObserver())
     async with http:
         await http.post("/sessions")
-        assert (await http.get("/healthz")).json() == {"ok": True, "sessions": 1, "turns_in_progress": 0}
+        assert (await http.get("/healthz")).json() == {"ok": True, "sessions": 1, "turns_in_progress": 0, "tools": []}

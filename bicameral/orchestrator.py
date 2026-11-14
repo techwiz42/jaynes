@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import List
+from typing import List, Optional
 
 from .actor import ACTOR_SYSTEM, Actor, ActorError, Message
 from .events import EventLog
 from .observer import Observer, ObserverError, Verdict
+from .tools.base import ToolCallEvent, ToolResultEvent, TurnContext
 
 logger = logging.getLogger(__name__)
 
@@ -21,10 +22,13 @@ def internal_note(verdict: Verdict) -> str:
 
 
 class Session:
-    def __init__(self, session_id: str, actor: Actor, observer: Observer) -> None:
+    def __init__(self, session_id: str, actor: Actor, observer: Observer, max_tool_calls: int = 5) -> None:
         self.id = session_id
         self.actor = actor
         self.observer = observer
+        self.max_tool_calls = max_tool_calls
+        self._turn_count = 0
+        self._turn: Optional[TurnContext] = None
         self.log = EventLog()
         self.history: List[Message] = []
         self._lock = asyncio.Lock()
@@ -40,10 +44,16 @@ class Session:
 
     async def _stream(self, kind: str, message_id: str, **extra: str) -> str:
         parts: List[str] = []
-        async for chunk in self.actor.stream(list(self.history), system=ACTOR_SYSTEM):
-            if chunk:
-                parts.append(chunk)
-                self.log.append("token", message_id=message_id, kind=kind, text=chunk, **extra)
+        turn = self._turn
+        options = {"turn": turn} if (turn is not None and getattr(self.actor, "uses_tools", False)) else {}
+        async for item in self.actor.stream(list(self.history), system=ACTOR_SYSTEM, **options):
+            if isinstance(item, ToolCallEvent):
+                self.log.append("tool_call", turn_id=turn.turn_id if turn else "", call_id=item.call_id, tool=item.tool, args=item.args)
+            elif isinstance(item, ToolResultEvent):
+                self.log.append("tool_result", turn_id=turn.turn_id if turn else "", call_id=item.call_id, tool=item.tool, ok=item.ok, summary=item.summary, truncated=item.truncated)
+            elif item:
+                parts.append(item)
+                self.log.append("token", message_id=message_id, kind=kind, text=item, **extra)
         text = "".join(parts)
         if not text.strip():
             raise ActorError("the actor returned an empty reply")
@@ -52,6 +62,8 @@ class Session:
     async def handle_user_message(self, text: str) -> None:
         """One turn. Turns are serialised: a second message waits for the first to finish."""
         async with self._lock:
+            self._turn_count += 1
+            self._turn = TurnContext(self.id, f"t{self._turn_count}", self.max_tool_calls)
             self.history.append({"role": "user", "content": text})
             self.log.append("user_message", text=text)
 
@@ -67,7 +79,8 @@ class Session:
             self.history.append({"role": "assistant", "content": draft})
 
             try:
-                verdict = await self.observer.review(self.history[:-1], draft)
+                trace = list(self._turn.trace) if self._turn else []
+                verdict = await (self.observer.review(self.history[:-1], draft, trace=trace) if trace else self.observer.review(self.history[:-1], draft))
             except Exception as error:                               # never treat a failed review as ok
                 _log_failure("observer", error)
                 self.log.append("error", where="observer", message=_describe(error))

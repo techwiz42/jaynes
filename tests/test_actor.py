@@ -18,6 +18,7 @@ def actor_with(*attempts):
     """A GeminiActor whose API call is scripted: each attempt is a list of chunk texts, ending in an exception to raise."""
     actor = GeminiActor.__new__(GeminiActor)                    # no client, no network
     actor._retry_delays = (0.0, 0.0)
+    actor._registry = None
     actor._request = lambda messages, system=None: ([], None)
     script = list(attempts)
 
