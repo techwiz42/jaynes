@@ -154,3 +154,23 @@ async def test_a_failing_audit_write_does_not_break_the_call(tmp_path):
             raise OSError("disk full")
 
     assert (await registry(Quick(), audit=BrokenAudit()).run("quick", {"text": "a"})).ok
+
+
+async def test_the_registry_builder_says_why_each_tool_is_off_and_gates_private_tools_on_the_egress_flag(caplog):
+    import logging
+
+    from bicameral.config import Settings
+    from bicameral.tools import build_registry
+
+    base = {"GEMINI_API_KEY": "g", "ANTHROPIC_API_KEY": "a", "AUDIT_LOG": "/tmp/jaynes-test-audit.jsonl"}
+    with caplog.at_level(logging.WARNING):
+        registry, notes = await build_registry(Settings.from_env(base))
+    assert "web_fetch" in registry.names and "web_search" not in registry.names and "github_read" not in registry.names and "retrieve_docs" not in registry.names
+    assert any("web_search is off" in n for n in notes) and any("github_read is off" in n for n in notes) and any("web_search is off" in r.message for r in caplog.records)
+
+    private = {**base, "SEARCH_API_KEY": "s", "GITHUB_TOKEN": "t", "GITHUB_REPO_ALLOWLIST": "o/r", "DOCS_DIR": "/tmp"}
+    registry, notes = await build_registry(Settings.from_env(private))
+    assert "web_search" in registry.names and "github_read" not in registry.names and "retrieve_docs" not in registry.names
+    assert any("ALLOW_PRIVATE_EGRESS" in n for n in notes)
+    registry, notes = await build_registry(Settings.from_env({**private, "ALLOW_PRIVATE_EGRESS": "1"}))
+    assert {"github_read", "retrieve_docs", "web_search", "web_fetch"} <= set(registry.names)

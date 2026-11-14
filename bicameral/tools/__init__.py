@@ -59,5 +59,5 @@ async def build_registry(settings: Settings) -> Tuple[ToolRegistry, List[str]]:
     terms = list(settings.private_terms) + list(settings.github_repo_allowlist)
     registry = ToolRegistry(tools, guard=PrivateContentGuard(terms), audit=AuditLog(settings.audit_log), secrets=settings.secrets())
     for note in notes:
-        logger.info(note)
+        logger.warning(note)                # warning level: the server's logger shows nothing quieter, and a tool being off is something to see at start-up
     return registry, notes

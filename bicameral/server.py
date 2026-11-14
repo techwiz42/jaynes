@@ -3,7 +3,7 @@
   POST /sessions                       -> {"session_id": ...}
   POST /sessions/{id}/messages         {"text": ...} -> 202; the turn runs in the background
   GET  /sessions/{id}/events           server-sent events; ?after=<id> (or Last-Event-ID) resumes after that event
-  GET  /healthz                        {"ok": true, "sessions": n, "turns_in_progress": n}
+  GET  /healthz                        {"ok": true, "sessions": n, "turns_in_progress": n, "tools": [...], "tools_off": [why each other tool is off]}
 """
 from __future__ import annotations
 
@@ -74,6 +74,7 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
     app.state.actor = actor
     app.state.observer = observer
     app.state.tools = []
+    app.state.tool_notes = []
     app.state.max_tool_calls = 5
     app.state.sessions = sessions
 
@@ -110,7 +111,7 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
 
     @app.get("/healthz")
     async def healthz() -> Dict[str, object]:
-        return {"ok": True, "sessions": len(sessions), "turns_in_progress": sum(1 for s in sessions.values() if s.busy), "tools": app.state.tools}
+        return {"ok": True, "sessions": len(sessions), "turns_in_progress": sum(1 for s in sessions.values() if s.busy), "tools": app.state.tools, "tools_off": app.state.tool_notes}
 
     if WEB_DIST.is_dir():                         # the built frontend, when there is one
         app.mount("/", WebFiles(directory=WEB_DIST, html=True), name="web")
