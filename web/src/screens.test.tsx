@@ -48,3 +48,15 @@ describe("relativeTime", () => {
     expect(relativeTime(1000, 1000 + 3 * 86400)).toMatch(/\d/);
   });
 });
+
+describe("the footer", () => {
+  it("names the author, gives the email, the year and links to the repository", async () => {
+    const { Footer, REPOSITORY } = await import("./Footer");
+    const html = renderToStaticMarkup(<Footer />);
+    expect(html).toContain("© 2026 Peter Sisk");
+    expect(html).toContain('href="mailto:pete@cyberiad.ai"');
+    expect(html).toContain(`href="${REPOSITORY}"`);
+    expect(REPOSITORY).toBe("https://github.com/techwiz42/jaynes");
+    expect(html).toContain('rel="noopener noreferrer"');
+  });
+});

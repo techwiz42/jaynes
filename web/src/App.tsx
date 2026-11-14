@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type Keyboard
 import { ApiError, currentUser, deleteConversation, listConversations, logout, type Account, type ConversationSummary } from "./api";
 import { AuthForm } from "./Auth";
 import { BrainIcon } from "./BrainIcon";
+import { Footer } from "./Footer";
 import { MarkdownText, plainText } from "./Markdown";
 import { MemoryPanel } from "./Memory";
 import { Sidebar } from "./Sidebar";
@@ -252,6 +253,7 @@ function Chat({
         </div>
         {memoryOpen ? <MemoryPanel email={account.email} onClose={() => setMemoryOpen(false)} onAccountDeleted={onLoggedOut} /> : <ObserverPanel state={state} />}
       </main>
+      <Footer />
     </div>
   );
 }
@@ -309,6 +311,13 @@ export default function App() {
   }, []);
   const loggedOut = useCallback(() => setAccount(null), []);
   if (account === undefined) return <p className="loading">Loading…</p>;
-  if (account === null) return <AuthForm onAuthenticated={setAccount} />;
+  if (account === null) {
+    return (
+      <>
+        <AuthForm onAuthenticated={setAccount} />
+        <Footer />
+      </>
+    );
+  }
   return <Workspace account={account} onLoggedOut={loggedOut} />;
 }
