@@ -61,6 +61,7 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1
 .markdown table { border-collapse: collapse; display: block; overflow-x: auto; }
 .markdown th, .markdown td { padding: 3px 8px; border: 1px solid var(--border); }
 .markdown a { color: inherit; }
+.markdown .katex-display { margin: 0.6em 0; overflow-x: auto; overflow-y: hidden; }
 .badge { padding: 0 6px; border-radius: 4px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; }
 .badge-contested { background: var(--note-bg); color: var(--note); }
 .badge-correction { background: var(--ok); color: var(--bg); }

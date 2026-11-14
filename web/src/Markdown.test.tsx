@@ -33,6 +33,40 @@ describe("MarkdownText", () => {
   });
 });
 
+describe("math", () => {
+  it("draws inline and display math with KaTeX", () => {
+    expect(html("so $x^2$ here")).toContain('class="katex"');
+    expect(html("$$\\int_0^1 x\\,dx$$")).toContain("katex-display");
+  });
+
+  it("draws the \\( \\) and \\[ \\] styles", () => {
+    expect(html("so \\(a+b\\) here")).toContain('class="katex"');
+    expect(html("see \\[a+b\\] now")).toContain("katex-display");
+  });
+
+  it("leaves prices as text", () => {
+    const out = html("It costs $5 and $10 in total.");
+    expect(out).not.toContain("katex");
+    expect(out).toContain("$5 and $10");
+  });
+
+  it("does not fail on math that will not parse", () => {
+    expect(() => html("$\\frac{1}{$")).not.toThrow();
+    expect(() => html("$\\notacommand{x}$")).not.toThrow();
+  });
+
+  it("does not let math run commands that fetch or link", () => {
+    const out = html("$\\href{javascript:alert(1)}{click}$ and $\\includegraphics{http://x/y.png}$");
+    expect(out).not.toMatch(/href=/i);                      // the equation's own source text may appear in its accessibility annotation; a link or image may not
+    expect(out).not.toContain("<a ");
+    expect(out).not.toContain("<img");
+  });
+
+  it("leaves dollar signs in code alone", () => {
+    expect(html("run `echo $HOME and $PATH`")).not.toContain("katex");
+  });
+});
+
 describe("plainText", () => {
   it("turns markdown into words for a preview", () => {
     expect(plainText("1. **Checks and Balances:** by requiring two chambers\n2. [link](http://x.y) here")).toBe("Checks and Balances: by requiring two chambers link here");
