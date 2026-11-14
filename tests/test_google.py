@@ -321,7 +321,7 @@ async def test_the_google_tools_need_the_credentials_and_the_egress_flag():
     from bicameral.config import Settings
     from bicameral.tools import build_registry
 
-    base = {"GEMINI_API_KEY": "g", "ANTHROPIC_API_KEY": "a", "AUDIT_LOG": "/tmp/jaynes-test-audit2.jsonl"}
+    base = {"GEMINI_API_KEY": "g", "ANTHROPIC_API_KEY": "a", "AUDIT_LOG": "/tmp/jaynes-test-audit2.jsonl", "SHARED_PRIVATE_TOOLS": "1"}
     google = {"GOOGLE_CLIENT_ID": "i", "GOOGLE_CLIENT_SECRET": "s", "GOOGLE_REFRESH_TOKEN": "r"}
     registry, notes = await build_registry(Settings.from_env(base))
     assert "gmail_read" not in registry.names and any("scripts/google-auth.py" in n for n in notes)

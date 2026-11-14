@@ -1,6 +1,11 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { ApiError, currentUser, deleteConversation, listConversations, logout, type Account, type ConversationSummary } from "./api";
+import { AuthForm } from "./Auth";
+import { BrainIcon } from "./BrainIcon";
 import { MarkdownText, plainText } from "./Markdown";
-import { isStreaming, type AssistantItem, type ChatState, type Item, type Review, type ToolItem } from "./reducer";
+import { MemoryPanel } from "./Memory";
+import { Sidebar } from "./Sidebar";
+import { isActorWorking, isStreaming, type AssistantItem, type ChatState, type Item, type Review, type ToolItem } from "./reducer";
 import { useChat } from "./useChat";
 
 function Badge({ children, tone }: { children: string; tone: "contested" | "correction" | "error" | "ok" }) {
@@ -124,7 +129,18 @@ function ObserverPanel({ state }: { state: ChatState }) {
   );
 }
 
-function Composer({ onSend, disabled }: { onSend: (text: string) => Promise<void>; disabled: boolean }) {
+/** Three dots in a wave, shown inside the input box while the actor is preparing a reply. */
+function Typing() {
+  return (
+    <span className="typing" role="status" aria-label="Jaynes is preparing a reply">
+      <span />
+      <span />
+      <span />
+    </span>
+  );
+}
+
+function Composer({ onSend, disabled, working }: { onSend: (text: string) => Promise<void>; disabled: boolean; working: boolean }) {
   const [text, setText] = useState("");
   const send = (): void => {
     const trimmed = text.trim();
@@ -145,7 +161,9 @@ function Composer({ onSend, disabled }: { onSend: (text: string) => Promise<void
   };
   return (
     <form className="composer" onSubmit={submit}>
+      <div className="field">
       <textarea
+        className={working ? "working" : undefined}
         value={text}
         onChange={(event) => setText(event.target.value)}
         onKeyDown={onKeyDown}
@@ -156,6 +174,8 @@ function Composer({ onSend, disabled }: { onSend: (text: string) => Promise<void
         disabled={disabled}
         autoFocus
       />
+        {working && <Typing />}
+      </div>
       <button type="submit" disabled={disabled || !text.trim()}>
         Send
       </button>
@@ -163,21 +183,58 @@ function Composer({ onSend, disabled }: { onSend: (text: string) => Promise<void
   );
 }
 
-export default function App() {
-  const { state, sessionId, connected, problem, send } = useChat();
+function Chat({
+  account,
+  conversationId,
+  conversations,
+  onOpen,
+  onNew,
+  onDelete,
+  onLogout,
+  onLoggedOut,
+  onActivity,
+  onConversation,
+}: {
+  account: Account;
+  conversationId: string | null;
+  conversations: ConversationSummary[];
+  onOpen: (id: string) => void;
+  onNew: () => void;
+  onDelete: (id: string) => void;
+  onLogout: () => void;
+  onLoggedOut: () => void;
+  onActivity: () => void;
+  onConversation: (id: string) => void;
+}) {
+  const { state, sessionId, conversationId: started, connected, problem, send } = useChat(conversationId, onLoggedOut, onActivity);
+  const [memoryOpen, setMemoryOpen] = useState(false);
+  useEffect(() => {
+    if (started) onConversation(started);
+  }, [started, onConversation]);
   return (
     <div className="app">
       <header>
-        <h1>jaynes</h1>
+        <h1 className="brand">
+          <BrainIcon size={26} />
+          jaynes
+        </h1>
         <span className={`status ${connected ? "on" : "off"}`}>{!sessionId ? "starting…" : connected ? "connected" : "reconnecting…"}</span>
         {isStreaming(state) && <span className="status on">replying…</span>}
+        <span className="spacer" />
+        <span className="account">{account.email}</span>
+        <button type="button" className="quiet" onClick={() => setMemoryOpen(!memoryOpen)} aria-expanded={memoryOpen}>
+          Memory
+        </button>
+        <button type="button" className="quiet" onClick={onLogout}>
+          Log out
+        </button>
       </header>
       {state.privateTools.length > 0 && (
         <div className="private" role="status">
           <span>
-            This conversation has read private data ({state.privateTools.join(", ")}). Web search and fetch are off for the rest of it, so nothing can be sent out. 
+            This conversation has read private data ({state.privateTools.join(", ")}). Web search and fetch are off for the rest of it, so nothing can be sent out.
           </span>
-          <button type="button" onClick={() => window.location.reload()}>
+          <button type="button" onClick={onNew}>
             Start a new conversation
           </button>
         </div>
@@ -188,12 +245,70 @@ export default function App() {
         </div>
       )}
       <main>
+        <Sidebar conversations={conversations} current={started} onOpen={onOpen} onNew={onNew} onDelete={onDelete} />
         <div className="chat">
           <Transcript state={state} />
-          <Composer onSend={send} disabled={!sessionId} />
+          <Composer onSend={send} disabled={!sessionId} working={isActorWorking(state)} />
         </div>
-        <ObserverPanel state={state} />
+        {memoryOpen ? <MemoryPanel email={account.email} onClose={() => setMemoryOpen(false)} onAccountDeleted={onLoggedOut} /> : <ObserverPanel state={state} />}
       </main>
     </div>
   );
+}
+
+/** A logged-in user's workspace: their saved conversations and the one that is open. Opening another one starts a fresh chat component, so nothing leaks between them. */
+function Workspace({ account, onLoggedOut }: { account: Account; onLoggedOut: () => void }) {
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [open, setOpen] = useState<{ key: number; id: string | null }>({ key: 0, id: null });
+  const [current, setCurrent] = useState<string | null>(null);
+
+  const refresh = useCallback((): void => {
+    listConversations().then(setConversations, (error: unknown) => {
+      if (error instanceof ApiError && error.status === 401) onLoggedOut();
+    });
+  }, [onLoggedOut]);
+  useEffect(refresh, [refresh]);
+
+  const start = useCallback((id: string | null): void => setOpen((previous) => ({ key: previous.key + 1, id })), []);
+  const newChat = useCallback((): void => start(null), [start]);
+  const remove = (id: string): void => {
+    if (!window.confirm("Delete this conversation and what Jaynes remembers from it?")) return;
+    void deleteConversation(id).then(
+      () => {
+        if (id === current) newChat();
+        refresh();
+      },
+      () => refresh(),
+    );
+  };
+  const leave = (): void => {
+    void logout().finally(onLoggedOut);
+  };
+
+  return (
+    <Chat
+      key={open.key}
+      account={account}
+      conversationId={open.id}
+      conversations={conversations}
+      onOpen={start}
+      onNew={newChat}
+      onDelete={remove}
+      onLogout={leave}
+      onLoggedOut={onLoggedOut}
+      onActivity={refresh}
+      onConversation={setCurrent}
+    />
+  );
+}
+
+export default function App() {
+  const [account, setAccount] = useState<Account | null | undefined>(undefined);
+  useEffect(() => {
+    currentUser().then(setAccount, () => setAccount(null));
+  }, []);
+  const loggedOut = useCallback(() => setAccount(null), []);
+  if (account === undefined) return <p className="loading">Loading…</p>;
+  if (account === null) return <AuthForm onAuthenticated={setAccount} />;
+  return <Workspace account={account} onLoggedOut={loggedOut} />;
 }

@@ -87,6 +87,28 @@ function hasAssistant(items: Item[], messageId: string): boolean {
   return items.some((item) => item.kind === "assistant" && item.messageId === messageId);
 }
 
+/** A message saved from an earlier part of the conversation. */
+export interface HistoryMessage {
+  role: "user" | "assistant";
+  text: string;
+}
+
+export type Action = ChatEvent | { type: "history"; messages: HistoryMessage[] };
+
+/** Put the saved messages of a continued conversation in front of whatever has arrived. They carry ids that cannot meet an event's, and no reviews or tool rows. */
+export function withHistory(state: ChatState, messages: HistoryMessage[]): ChatState {
+  const items: Item[] = messages.map((message, index) =>
+    message.role === "user"
+      ? { kind: "user", key: `h${index}`, text: message.text }
+      : { kind: "assistant", messageId: `h${index}`, role: "draft", text: message.text, complete: true, interrupted: false, contested: false, retractionIssues: [] },
+  );
+  return { ...state, items: [...items, ...state.items] };
+}
+
+export function reduceAction(state: ChatState, action: Action): ChatState {
+  return action.type === "history" ? withHistory(state, action.messages) : reduce(state, action);
+}
+
 export function reduce(state: ChatState, event: ChatEvent): ChatState {
   if (event.id <= state.lastEventId) return state;
   const next = (patch: Partial<ChatState>): ChatState => ({ ...state, ...patch, lastEventId: event.id });
@@ -196,6 +218,22 @@ export function reduce(state: ChatState, event: ChatEvent): ChatState {
 /** True while a reply is being streamed. */
 export function isStreaming(state: ChatState): boolean {
   return state.items.some((item) => item.kind === "assistant" && !item.complete && !item.interrupted);
+}
+
+/**
+ * True while the actor is preparing a reply: from the moment a message is sent until a reply the actor has finished and the observer has not retracted, including the wait before
+ * the first word, the tool calls, and the wait for a correction after a retraction. It is false while the observer is reading a finished reply, and after an error or an interrupted reply.
+ */
+export function isActorWorking(state: ChatState): boolean {
+  const lastUser = state.items.map((item) => item.kind).lastIndexOf("user");
+  if (lastUser === -1) return false;
+  const since = state.items.slice(lastUser + 1);
+  if (since.some((item) => item.kind === "error")) return false;
+  const replies = since.filter((item): item is AssistantItem => item.kind === "assistant");
+  const last = replies[replies.length - 1];
+  if (!last) return true;
+  if (last.interrupted) return false;
+  return !last.complete || last.contested;
 }
 
 /** The review of a message, if the observer has given one. */

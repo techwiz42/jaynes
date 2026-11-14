@@ -41,6 +41,7 @@ class Tool:
     max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS
     outgoing: bool = False                # True when part of the arguments leaves this machine for a third party (a query, a URL): the private-content guard checks it
     private: bool = False                 # True when results are the user's private content (mail, files, repositories): once one has been read, outgoing tools are refused
+    wants_context: bool = False           # True when run() takes the turn's context too (the user's id, for a tool that reads or writes that user's own data)
 
     def schema(self) -> Dict[str, Any]:
         return clean_schema(self.args_model.model_json_schema())
@@ -49,7 +50,7 @@ class Tool:
         """The text of the arguments that would leave this machine. Only used when `outgoing` is True."""
         return ""
 
-    async def run(self, args: BaseModel) -> ToolResult:
+    async def run(self, args: BaseModel, ctx: Optional["TurnContext"] = None) -> ToolResult:
         raise NotImplementedError
 
 
@@ -117,6 +118,8 @@ class TurnContext:
     calls_used: int = 0
     trace: List[TraceItem] = field(default_factory=list)
     taint: Taint = field(default_factory=Taint)
+    user_id: str = ""                     # whose conversation this is; a tool that touches a user's data uses this and nothing the model says
+    conversation_id: str = ""
 
     def next_call_id(self) -> str:
         self.calls_used += 1
@@ -212,7 +215,7 @@ class ToolRegistry:
             if blocked:
                 return ToolResult.failure("refused: this would send private content to a third party (it matches a configured private term); rephrase without it")
         try:
-            result = await asyncio.wait_for(tool.run(args), timeout=tool.timeout_seconds)
+            result = await asyncio.wait_for(tool.run(args, ctx) if tool.wants_context else tool.run(args), timeout=tool.timeout_seconds)
         except asyncio.TimeoutError:
             return ToolResult.failure(f"timed out after {tool.timeout_seconds:g} seconds")
         except Exception as error:                      # a tool bug or an unexpected failure: the kind only, never a message that might hold a secret

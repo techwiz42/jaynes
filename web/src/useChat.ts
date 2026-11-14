@@ -1,32 +1,60 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { connectEvents, createSession, sendMessage } from "./api";
-import { initialState, reduce } from "./reducer";
+import { ApiError, conversationMessages, connectEvents, createSession, sendMessage } from "./api";
+import { initialState, reduceAction } from "./reducer";
 
-export function useChat() {
-  const [state, dispatch] = useReducer(reduce, initialState);
+/**
+ * One conversation. Without `conversationId` a new one is started; with one, that conversation is continued: its saved messages are shown first, then the live events.
+ * `onLoggedOut` is called when the server says the login has ended. `onActivity` when something the conversation list shows may have changed (a message was sent, a reply finished).
+ */
+export function useChat(conversationId: string | null, onLoggedOut: () => void, onActivity: () => void) {
+  const [state, dispatch] = useReducer(reduceAction, initialState);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [thisConversation, setThisConversation] = useState<string | null>(conversationId);
   const [connected, setConnected] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const lastId = useRef(0);
   lastId.current = state.lastEventId;
 
+  const failed = useCallback(
+    (error: unknown): void => {
+      if (error instanceof ApiError && error.status === 401) onLoggedOut();
+      else setProblem((error as Error).message);
+    },
+    [onLoggedOut],
+  );
+
   useEffect(() => {
     let cancelled = false;
-    createSession()
-      .then((id) => {
-        if (!cancelled) setSessionId(id);
-      })
-      .catch((error: Error) => setProblem(error.message));
+    (async () => {
+      const started = await createSession(conversationId ?? undefined);
+      if (conversationId && !started.live) {
+        const saved = await conversationMessages(started.conversationId);
+        if (!cancelled) dispatch({ type: "history", messages: saved.map((m) => ({ role: m.role, text: m.text })) });
+      }
+      if (!cancelled) {
+        setThisConversation(started.conversationId);
+        setSessionId(started.sessionId);
+      }
+    })().catch((error: unknown) => {
+      if (!cancelled) failed(error);
+    });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [conversationId, failed]);
 
   useEffect(() => {
     if (!sessionId) return;
-    const connection = connectEvents(sessionId, () => lastId.current, dispatch, setConnected);
+    const connection = connectEvents(sessionId, () => lastId.current, dispatch, setConnected, onLoggedOut);
     return () => connection.close();
-  }, [sessionId]);
+  }, [sessionId, onLoggedOut]);
+
+  const replying = state.items.some((item) => item.kind === "assistant" && !item.complete && !item.interrupted);
+  const wasReplying = useRef(false);
+  useEffect(() => {
+    if (wasReplying.current && !replying) onActivity();
+    wasReplying.current = replying;
+  }, [replying, onActivity]);
 
   const send = useCallback(
     async (text: string) => {
@@ -34,12 +62,13 @@ export function useChat() {
       setProblem(null);
       try {
         await sendMessage(sessionId, text);
+        onActivity();
       } catch (error) {
-        setProblem((error as Error).message);
+        failed(error);
       }
     },
-    [sessionId],
+    [sessionId, failed, onActivity],
   );
 
-  return { state, sessionId, connected, problem, send };
+  return { state, sessionId, conversationId: thisConversation, connected, problem, send };
 }

@@ -13,6 +13,10 @@ The actor (Gemini) has a small set of **read-only** tools so that its replies ca
 | `github_read` | Lists directories, reads files, searches code, lists commits, reads and lists issues, in allowlisted repositories only. | `GITHUB_TOKEN` and `GITHUB_REPO_ALLOWLIST` are set **and** `ALLOW_PRIVATE_EGRESS=1` |
 | `gmail_read` | **Read-only** Gmail: search with Gmail syntax, read one message as text, list labels. Attachments are not read. | the three `GOOGLE_*` values are set **and** `ALLOW_PRIVATE_EGRESS=1` |
 | `drive_read` | **Read-only** Google Drive: search by words or name, list a folder, read a Doc (as text), Sheet (as CSV, first sheet), Slides (as text) or plain text file. | same as `gmail_read` |
+| `memory_search` | Searches the logged-in user's own memory: earlier conversations, uploaded documents, saved notes. Verbatim excerpts. Local index. Counts as reading private data. | `ALLOW_PRIVATE_EGRESS=1` |
+| `memory_save` | Saves a note in the logged-in user's memory, only when they ask. | `ALLOW_PRIVATE_EGRESS=1` |
+
+`retrieve_docs`, `github_read`, `gmail_read` and `drive_read` use one set of credentials for everyone, and with user accounts every user could reach them, so they are also off unless `SHARED_PRIVATE_TOOLS=1` (a single-owner deployment). Giving each user their own connection is future work.
 
 The server logs why each tool that is off is off, and `GET /healthz` lists the tools that are on. At most `MAX_TOOL_CALLS_PER_TURN` (default 5) calls are made per turn; when they are spent the model gets one more call with tools switched off and must answer with what it has.
 

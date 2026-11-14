@@ -1,32 +1,49 @@
-"""HTTP routes. No authentication: this service is for a private network and must be reached only through a tunnel to localhost.
+"""HTTP routes. Users register and log in; everything else needs the login cookie, and a user sees only their own sessions, conversations and memory. The service is still meant
+to be reached through a tunnel to localhost.
 
-  POST /sessions                       -> {"session_id": ...}
-  POST /sessions/{id}/messages         {"text": ...} -> 202; the turn runs in the background
-  GET  /sessions/{id}/events           server-sent events; ?after=<id> (or Last-Event-ID) resumes after that event
-  GET  /healthz                        {"ok": true, "sessions": n, "turns_in_progress": n, "tools": [...], "tools_off": [why each other tool is off]}
+  POST /auth/register {email, password} -> 201 {"email"}; logs in      POST /auth/login {email, password} -> {"email"}
+  POST /auth/logout                                                     GET /auth/me -> {"email"} or 401
+  POST /auth/delete-account {password}  removes the account and all its data
+  POST /sessions {conversation_id?}     -> {"session_id", "conversation_id", "live"}  (a new conversation, saved with its first message, or an earlier one of this user's continued;
+                                           "live" is true when that conversation already had a running session, whose events then replay all of it)
+  POST /sessions/{id}/messages {"text"} -> 202; the turn runs in the background
+  GET  /sessions/{id}/events            server-sent events; ?after=<id> (or Last-Event-ID) resumes after that event
+  GET  /conversations                   this user's conversations      GET /conversations/{id}/messages     DELETE /conversations/{id}
+  GET/POST /memory/documents (POST body = the file's bytes, ?name=)     DELETE /memory/documents/{id}
+  GET/POST /memory/notes {title, text}                                  DELETE /memory/notes/{id}
+  GET  /healthz                         {"ok": true, "sessions": n, "turns_in_progress": n, "tools": [...], "tools_off": [why each other tool is off]}
 """
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator, Dict, Optional, Set
+from typing import AsyncIterator, Dict, List, Optional, Set
+from urllib.parse import urlsplit
 
-from fastapi import FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from . import auth
 from .actor import Actor
 from .config import Settings
+from .documents import DocumentError, extract_text
 from .events import Event
 from .observer import Observer
 from .orchestrator import Session
+from .store import Store, StoreError
+
+logger = logging.getLogger(__name__)
 
 KEEPALIVE_SECONDS = 15.0
 WEB_DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
+COOKIE = "jaynes_session"
+HISTORY_TURNS = 40                  # messages of an earlier conversation given back to the model when it is continued
 
 
 class WebFiles(StaticFiles):
@@ -44,23 +61,49 @@ class MessageIn(BaseModel):
     text: str = Field(min_length=1, max_length=8000)
 
 
+class Credentials(BaseModel):
+    email: str = Field(max_length=320)
+    password: str = Field(max_length=500)
+
+
+class PasswordIn(BaseModel):
+    password: str = Field(max_length=500)
+
+
+class NewSession(BaseModel):
+    conversation_id: Optional[str] = Field(default=None, max_length=64)
+
+
+class NoteIn(BaseModel):
+    title: str = Field(default="", max_length=80)
+    text: str = Field(min_length=1, max_length=4000)
+
+
 def sse_frame(event: Event) -> str:
     return f"id: {event.id}\nevent: {event.type}\ndata: {json.dumps(event.flat())}\n\n"
 
 
-def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = None) -> FastAPI:
+def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = None, store: Optional[Store] = None, cookie_secure: bool = False,
+               max_upload_bytes: int = 2_000_000) -> FastAPI:
     """Without an actor and observer given, the real ones are built from the environment when the server starts (and it refuses to start without its keys)."""
     sessions: Dict[str, Session] = {}
+    by_conversation: Dict[str, str] = {}                    # conversation id -> the live session continuing it
     tasks: Set[asyncio.Task] = set()
+    login_failures = auth.Throttle(limit=5, window_seconds=15 * 60)         # per email
+    address_failures = auth.Throttle(limit=30, window_seconds=15 * 60)      # per address
+    registrations = auth.Throttle(limit=20, window_seconds=3600)            # per address
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        if app.state.actor is None or app.state.observer is None:
+        if app.state.actor is None or app.state.observer is None or app.state.store is None:
             from .actor import GeminiActor
             from .observer import HaikuObserver
             from .tools import build_registry
             settings = Settings.from_env()
-            registry, notes = await build_registry(settings)
+            app.state.store = app.state.store or Store(str(Path(settings.data_dir) / "jaynes.db"))
+            app.state.cookie_secure = settings.cookie_secure
+            app.state.max_upload_bytes = settings.max_upload_bytes
+            registry, notes = await build_registry(settings, app.state.store)
             app.state.tool_notes = notes
             app.state.max_tool_calls = settings.max_tool_calls_per_turn
             app.state.max_revisions = settings.max_revisions
@@ -74,35 +117,148 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
     app = FastAPI(title="jaynes", lifespan=lifespan)
     app.state.actor = actor
     app.state.observer = observer
+    app.state.store = store
+    app.state.cookie_secure = cookie_secure
+    app.state.max_upload_bytes = max_upload_bytes
     app.state.tools = []
     app.state.tool_notes = []
     app.state.max_tool_calls = 5
     app.state.max_revisions = 5
     app.state.sessions = sessions
 
-    def find(session_id: str) -> Session:
+    # ---- guards ------------------------------------------------------------------------------------------------------------------------------------------------
+
+    def same_origin(request: Request) -> None:
+        """A browser sends Origin on a cross-site or cross-port request; it must be this server's own address. (Cookies do not tell ports apart, so another page on localhost could
+        otherwise act as the user.) Requests without an Origin, such as from a script, are not browsers acting for a user."""
+        origin = request.headers.get("origin")
+        if origin and urlsplit(origin).netloc != request.headers.get("host", ""):
+            raise HTTPException(status_code=403, detail="cross-origin request refused")
+
+    async def current_user(request: Request) -> Dict[str, str]:
+        token = request.cookies.get(COOKIE)
+        user = await app.state.store.run(app.state.store.user_for_login, auth.hash_token(token)) if token else None
+        if user is None:
+            raise HTTPException(status_code=401, detail="log in first")
+        return user
+
+    def address(request: Request) -> str:
+        return request.client.host if request.client else "unknown"
+
+    def start_login(response: Response, user_id: str, token: str) -> None:
+        response.set_cookie(COOKIE, token, max_age=int(auth.LOGIN_LIFETIME_SECONDS), httponly=True, samesite="strict", secure=app.state.cookie_secure, path="/")
+
+    # ---- accounts ----------------------------------------------------------------------------------------------------------------------------------------------
+
+    @app.post("/auth/register", status_code=201, dependencies=[Depends(same_origin)])
+    async def register(body: Credentials, request: Request, response: Response) -> Dict[str, str]:
+        where = address(request)
+        if registrations.blocked(where):
+            raise HTTPException(status_code=429, detail="too many registrations from here; try again later", headers={"Retry-After": str(registrations.retry_after(where))})
+        try:
+            email = auth.normalize_email(body.email)
+            auth.check_password(body.password)
+        except auth.AuthError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+        password_hash = await asyncio.to_thread(auth.hash_password, body.password)
+        try:
+            user_id = await app.state.store.run(app.state.store.create_user, email, password_hash)
+        except StoreError as error:
+            raise HTTPException(status_code=409, detail=str(error))
+        registrations.add(where)
+        token, hashed = auth.new_token()
+        await app.state.store.run(app.state.store.create_login, user_id, hashed, auth.LOGIN_LIFETIME_SECONDS)
+        start_login(response, user_id, token)
+        return {"email": email}
+
+    @app.post("/auth/login", dependencies=[Depends(same_origin)])
+    async def login(body: Credentials, request: Request, response: Response) -> Dict[str, str]:
+        where = address(request)
+        try:
+            email = auth.normalize_email(body.email)
+        except auth.AuthError:
+            raise HTTPException(status_code=401, detail="wrong email or password")
+        for throttle, key in ((login_failures, email), (address_failures, where)):
+            if throttle.blocked(key):
+                raise HTTPException(status_code=429, detail="too many failed attempts; try again later", headers={"Retry-After": str(throttle.retry_after(key))})
+        user = await app.state.store.run(app.state.store.user_by_email, email)
+        ok = await asyncio.to_thread(auth.verify_password, body.password, user["password_hash"] if user else None)
+        if not (ok and user):
+            login_failures.add(email)
+            address_failures.add(where)
+            raise HTTPException(status_code=401, detail="wrong email or password")
+        login_failures.clear(email)
+        token, hashed = auth.new_token()
+        await app.state.store.run(app.state.store.create_login, user["id"], hashed, auth.LOGIN_LIFETIME_SECONDS)
+        start_login(response, user["id"], token)
+        return {"email": email}
+
+    @app.post("/auth/logout", dependencies=[Depends(same_origin)])
+    async def logout(request: Request, response: Response) -> Dict[str, bool]:
+        token = request.cookies.get(COOKIE)
+        if token:
+            await app.state.store.run(app.state.store.end_login, auth.hash_token(token))
+        response.delete_cookie(COOKIE, path="/")
+        return {"ok": True}
+
+    @app.get("/auth/me")
+    async def me(user: Dict[str, str] = Depends(current_user)) -> Dict[str, str]:
+        return {"email": user["email"]}
+
+    @app.post("/auth/delete-account", dependencies=[Depends(same_origin)])
+    async def delete_account(body: PasswordIn, response: Response, user: Dict[str, str] = Depends(current_user)) -> Dict[str, bool]:
+        record = await app.state.store.run(app.state.store.user_by_email, user["email"])
+        if not (record and await asyncio.to_thread(auth.verify_password, body.password, record["password_hash"])):
+            raise HTTPException(status_code=401, detail="wrong password")
+        for session_id in [sid for sid, s in sessions.items() if s.user_id == user["id"]]:
+            sessions.pop(session_id).log.close()
+        for conversation_id in [c for c, sid in by_conversation.items() if sid not in sessions]:
+            by_conversation.pop(conversation_id, None)
+        await app.state.store.run(app.state.store.delete_user, user["id"])
+        response.delete_cookie(COOKIE, path="/")
+        return {"ok": True}
+
+    # ---- sessions: one live conversation -------------------------------------------------------------------------------------------------------------------------
+
+    def find(session_id: str, user: Dict[str, str]) -> Session:
         session = sessions.get(session_id)
-        if session is None:
+        if session is None or session.user_id != user["id"]:             # another user's session looks exactly like one that does not exist
             raise HTTPException(status_code=404, detail="no such session")
         return session
 
-    @app.post("/sessions")
-    async def new_session() -> Dict[str, str]:
+    @app.post("/sessions", dependencies=[Depends(same_origin)])
+    async def new_session(body: Optional[NewSession] = None, user: Dict[str, str] = Depends(current_user)) -> Dict[str, object]:
+        db = app.state.store
+        conversation_id = body.conversation_id if body else None
+        history: List[Dict[str, str]] = []
+        if conversation_id:
+            live = by_conversation.get(conversation_id)
+            if live and live in sessions and sessions[live].user_id == user["id"]:
+                return {"session_id": live, "conversation_id": conversation_id, "live": True}
+            messages = await db.run(db.conversation_messages, user["id"], conversation_id)
+            if messages is None:
+                raise HTTPException(status_code=404, detail="no such conversation")
+            history = [{"role": m["role"], "content": m["text"]} for m in messages[-HISTORY_TURNS:]]
+        else:
+            conversation_id = uuid.uuid4().hex                       # saved when its first message is, so opening the page leaves nothing behind
         session_id = uuid.uuid4().hex
-        sessions[session_id] = Session(session_id, app.state.actor, app.state.observer, app.state.max_tool_calls, app.state.max_revisions)
-        return {"session_id": session_id}
+        sessions[session_id] = Session(session_id, app.state.actor, app.state.observer, app.state.max_tool_calls, app.state.max_revisions,
+                                       user_id=user["id"], conversation_id=conversation_id, store=db, history=history, new_conversation=not body or not body.conversation_id)
+        by_conversation[conversation_id] = session_id
+        return {"session_id": session_id, "conversation_id": conversation_id, "live": False}
 
-    @app.post("/sessions/{session_id}/messages", status_code=202)
-    async def send(session_id: str, message: MessageIn) -> Dict[str, bool]:
-        session = find(session_id)
+    @app.post("/sessions/{session_id}/messages", status_code=202, dependencies=[Depends(same_origin)])
+    async def send(session_id: str, message: MessageIn, user: Dict[str, str] = Depends(current_user)) -> Dict[str, bool]:
+        session = find(session_id, user)
         task = asyncio.get_running_loop().create_task(session.handle_user_message(message.text))
         tasks.add(task)
         task.add_done_callback(tasks.discard)
         return {"accepted": True}
 
     @app.get("/sessions/{session_id}/events")
-    async def events(session_id: str, after: Optional[int] = Query(default=None, ge=0), last_event_id: Optional[str] = Header(default=None)) -> StreamingResponse:
-        session = find(session_id)
+    async def events(session_id: str, after: Optional[int] = Query(default=None, ge=0), last_event_id: Optional[str] = Header(default=None),
+                     user: Dict[str, str] = Depends(current_user)) -> StreamingResponse:
+        session = find(session_id, user)
         resume = after if after is not None else (int(last_event_id) if (last_event_id or "").isdigit() else 0)
 
         async def frames() -> AsyncIterator[str]:
@@ -110,6 +266,78 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
                 yield ": keepalive\n\n" if event is None else sse_frame(event)
 
         return StreamingResponse(frames(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    # ---- saved conversations -----------------------------------------------------------------------------------------------------------------------------------
+
+    @app.get("/conversations")
+    async def conversations(user: Dict[str, str] = Depends(current_user)) -> List[Dict[str, object]]:
+        return await app.state.store.run(app.state.store.list_conversations, user["id"])
+
+    @app.get("/conversations/{conversation_id}/messages")
+    async def conversation_messages(conversation_id: str, user: Dict[str, str] = Depends(current_user)) -> List[Dict[str, object]]:
+        messages = await app.state.store.run(app.state.store.conversation_messages, user["id"], conversation_id)
+        if messages is None:
+            raise HTTPException(status_code=404, detail="no such conversation")
+        return messages
+
+    @app.delete("/conversations/{conversation_id}", dependencies=[Depends(same_origin)])
+    async def delete_conversation(conversation_id: str, user: Dict[str, str] = Depends(current_user)) -> Dict[str, bool]:
+        live = by_conversation.get(conversation_id)
+        if live and live in sessions and sessions[live].user_id == user["id"]:
+            if sessions[live].busy:
+                raise HTTPException(status_code=409, detail="a reply is being written; try again in a moment")
+            sessions.pop(live).log.close()
+            by_conversation.pop(conversation_id, None)
+        if not await app.state.store.run(app.state.store.delete_conversation, user["id"], conversation_id):
+            raise HTTPException(status_code=404, detail="no such conversation")
+        return {"ok": True}
+
+    # ---- memory: documents and notes ----------------------------------------------------------------------------------------------------------------------------
+
+    @app.get("/memory/documents")
+    async def list_documents(user: Dict[str, str] = Depends(current_user)) -> List[Dict[str, object]]:
+        return await app.state.store.run(app.state.store.list_memory, user["id"], "document")
+
+    @app.post("/memory/documents", status_code=201, dependencies=[Depends(same_origin)])
+    async def add_document(request: Request, name: str = Query(default="", max_length=200), user: Dict[str, str] = Depends(current_user)) -> Dict[str, str]:
+        declared = request.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > app.state.max_upload_bytes:
+            raise HTTPException(status_code=413, detail=f"too large: at most {app.state.max_upload_bytes:,} bytes")
+        data = bytearray()
+        async for chunk in request.stream():
+            data.extend(chunk)
+            if len(data) > app.state.max_upload_bytes:
+                raise HTTPException(status_code=413, detail=f"too large: at most {app.state.max_upload_bytes:,} bytes")
+        try:
+            title, text = await asyncio.to_thread(extract_text, name, bytes(data))
+            document_id = await app.state.store.run(app.state.store.add_memory, user["id"], "document", title, text)
+        except (DocumentError, StoreError) as error:
+            raise HTTPException(status_code=422, detail=str(error))
+        return {"id": document_id, "title": title}
+
+    @app.delete("/memory/documents/{document_id}", dependencies=[Depends(same_origin)])
+    async def delete_document(document_id: str, user: Dict[str, str] = Depends(current_user)) -> Dict[str, bool]:
+        if not await app.state.store.run(app.state.store.delete_memory, user["id"], "document", document_id):
+            raise HTTPException(status_code=404, detail="no such document")
+        return {"ok": True}
+
+    @app.get("/memory/notes")
+    async def list_notes(user: Dict[str, str] = Depends(current_user)) -> List[Dict[str, object]]:
+        return await app.state.store.run(app.state.store.list_memory, user["id"], "note")
+
+    @app.post("/memory/notes", status_code=201, dependencies=[Depends(same_origin)])
+    async def add_note(body: NoteIn, user: Dict[str, str] = Depends(current_user)) -> Dict[str, str]:
+        try:
+            note_id = await app.state.store.run(app.state.store.add_memory, user["id"], "note", body.title or body.text, body.text)
+        except StoreError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+        return {"id": note_id}
+
+    @app.delete("/memory/notes/{note_id}", dependencies=[Depends(same_origin)])
+    async def delete_note(note_id: str, user: Dict[str, str] = Depends(current_user)) -> Dict[str, bool]:
+        if not await app.state.store.run(app.state.store.delete_memory, user["id"], "note", note_id):
+            raise HTTPException(status_code=404, detail="no such note")
+        return {"ok": True}
 
     @app.get("/healthz")
     async def healthz() -> Dict[str, object]:

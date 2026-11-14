@@ -13,3 +13,7 @@ web/dist/
 experiments/results/
 audit.jsonl
 *.jsonl
+data/
+*.db
+*.db-wal
+*.db-shm

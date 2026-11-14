@@ -162,7 +162,7 @@ async def test_the_registry_builder_says_why_each_tool_is_off_and_gates_private_
     from bicameral.config import Settings
     from bicameral.tools import build_registry
 
-    base = {"GEMINI_API_KEY": "g", "ANTHROPIC_API_KEY": "a", "AUDIT_LOG": "/tmp/jaynes-test-audit.jsonl"}
+    base = {"GEMINI_API_KEY": "g", "ANTHROPIC_API_KEY": "a", "AUDIT_LOG": "/tmp/jaynes-test-audit.jsonl", "SHARED_PRIVATE_TOOLS": "1"}
     with caplog.at_level(logging.WARNING):
         registry, notes = await build_registry(Settings.from_env(base))
     assert "web_fetch" in registry.names and "web_search" not in registry.names and "github_read" not in registry.names and "retrieve_docs" not in registry.names

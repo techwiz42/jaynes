@@ -46,6 +46,10 @@ class Settings:
     gmail_exclude_labels: Tuple[str, ...] = ()      # GMAIL_EXCLUDE_LABELS: label names whose messages are never shown
     gmail_exclude_senders: Tuple[str, ...] = ()     # GMAIL_EXCLUDE_SENDERS: text in a From address that hides the message
     drive_exclude_terms: Tuple[str, ...] = ()       # DRIVE_EXCLUDE_TERMS: text in a file name that hides the file
+    data_dir: str = "data"                          # DATA_DIR: where jaynes.db (users, conversations, memory) lives; created with mode 600 for the file
+    cookie_secure: bool = False                     # COOKIE_SECURE=1: mark the login cookie Secure (set it when the page is served over https)
+    shared_private_tools: bool = False              # SHARED_PRIVATE_TOOLS=1: Gmail, Drive, GitHub and DOCS_DIR tools use one set of credentials, so with several users they stay off unless this is set
+    max_upload_bytes: int = 2_000_000               # MAX_UPLOAD_BYTES: the largest document a user may upload
 
     def secrets(self) -> Tuple[str, ...]:
         return tuple(v for v in (self.gemini_api_key, self.anthropic_api_key, self.search_api_key, self.github_token, self.google_client_secret, self.google_refresh_token) if v)
@@ -74,6 +78,9 @@ class Settings:
         raw_revisions = (env.get("MAX_REVISIONS") or "").strip() or "5"
         if not raw_revisions.isdigit() or not 1 <= int(raw_revisions) <= 10:
             raise ConfigError("MAX_REVISIONS must be a whole number from 1 to 10")
+        raw_upload = (env.get("MAX_UPLOAD_BYTES") or "").strip() or "2000000"
+        if not raw_upload.isdigit() or not 1000 <= int(raw_upload) <= 20_000_000:
+            raise ConfigError("MAX_UPLOAD_BYTES must be a whole number from 1000 to 20000000")
         repos = _list(env.get("GITHUB_REPO_ALLOWLIST"))
         for repo in repos:
             if repo.count("/") != 1 or not all(repo.split("/")):
@@ -100,4 +107,8 @@ class Settings:
             gmail_exclude_labels=_list(env.get("GMAIL_EXCLUDE_LABELS")),
             gmail_exclude_senders=_list(env.get("GMAIL_EXCLUDE_SENDERS")),
             drive_exclude_terms=_list(env.get("DRIVE_EXCLUDE_TERMS")),
+            data_dir=(env.get("DATA_DIR") or "data").strip(),
+            cookie_secure=_flag(env.get("COOKIE_SECURE")),
+            shared_private_tools=_flag(env.get("SHARED_PRIVATE_TOOLS")),
+            max_upload_bytes=int(raw_upload),
         )

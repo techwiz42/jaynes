@@ -22,7 +22,8 @@ def internal_note(verdict: Verdict) -> str:
 
 
 class Session:
-    def __init__(self, session_id: str, actor: Actor, observer: Observer, max_tool_calls: int = 5, max_revisions: int = 5) -> None:
+    def __init__(self, session_id: str, actor: Actor, observer: Observer, max_tool_calls: int = 5, max_revisions: int = 5, user_id: str = "", conversation_id: str = "",
+                 store=None, history: Optional[List[Message]] = None, new_conversation: bool = False) -> None:
         self.id = session_id
         self.actor = actor
         self.observer = observer
@@ -31,8 +32,12 @@ class Session:
         self._turn_count = 0
         self._turn: Optional[TurnContext] = None
         self.taint = Taint()                                  # lasts as long as the conversation
+        self.user_id = user_id                                # whose conversation this is; nobody else may read its events or add to it
+        self.conversation_id = conversation_id
+        self._unsaved = new_conversation                       # the conversation is not in the database until its first message is
+        self.store = store                                    # where messages are saved for the user; None keeps the conversation in memory only
         self.log = EventLog()
-        self.history: List[Message] = []
+        self.history: List[Message] = list(history or [])
         self._lock = asyncio.Lock()
         self._message_count = 0
 
@@ -65,9 +70,10 @@ class Session:
         """One turn. Turns are serialised: a second message waits for the first to finish."""
         async with self._lock:
             self._turn_count += 1
-            self._turn = TurnContext(self.id, f"t{self._turn_count}", self.max_tool_calls, taint=self.taint)
+            self._turn = TurnContext(self.id, f"t{self._turn_count}", self.max_tool_calls, taint=self.taint, user_id=self.user_id, conversation_id=self.conversation_id)
             self.history.append({"role": "user", "content": text})
             self.log.append("user_message", text=text)
+            await self._remember("user", text)
 
             draft_id = self._new_message_id()
             try:
@@ -92,6 +98,7 @@ class Session:
                     return
                 self.log.append("observer_verdict", message_id=message_id, **verdict.model_dump())
                 if verdict.verdict != "retract":
+                    await self._remember("assistant", draft)          # only a reply the observer approved is kept
                     return
                 self.log.append("retraction", message_id=message_id, issues=verdict.issues, text=draft)
                 if revision == self.max_revisions:
@@ -110,6 +117,17 @@ class Session:
                 self.log.append("draft_complete", message_id=correction_id, text=draft)
                 self.history.append({"role": "assistant", "content": draft})
                 message_id = correction_id
+
+    async def _remember(self, role: str, text: str) -> None:
+        """Save a message to this user's conversation, which also adds it to their searchable memory. A failure to save is logged, never shown as a failed turn."""
+        if self.store is None or not self.user_id or not self.conversation_id:
+            return
+        try:
+            saved = await self.store.run(self.store.add_message, self.user_id, self.conversation_id, role, text, self._unsaved)
+            if saved:
+                self._unsaved = False
+        except Exception as error:                                # noqa: BLE001
+            _log_failure("store", error)
 
 
 def _describe(error: Exception) -> str:

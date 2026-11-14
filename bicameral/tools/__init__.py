@@ -13,7 +13,7 @@ from .guard import PrivateContentGuard
 logger = logging.getLogger(__name__)
 
 
-async def build_registry(settings: Settings) -> Tuple[ToolRegistry, List[str]]:
+async def build_registry(settings: Settings, store=None) -> Tuple[ToolRegistry, List[str]]:
     """The registry, and a line for each tool left out and why (also logged, never containing a value)."""
     from .docs import DocIndex, RetrieveDocs
     from .github import GitHubRead
@@ -37,7 +37,21 @@ async def build_registry(settings: Settings) -> Tuple[ToolRegistry, List[str]]:
         notes.append(f"python_sandbox is off: {problem}")
 
     private_ok = settings.allow_private_egress
-    if settings.docs_dir:
+    if store is not None:
+        if private_ok:
+            from .memory import MemorySave, MemorySearch
+            tools.append(MemorySearch(store))
+            tools.append(MemorySave(store))
+        else:
+            notes.append("memory_search and memory_save are off: ALLOW_PRIVATE_EGRESS is not 1 (what a user stored would go to the model providers; see the README)")
+
+    # Gmail, Drive, GitHub and DOCS_DIR use one set of credentials for everyone who can log in. With user accounts they stay off unless the operator says that is intended.
+    shared_ok = settings.shared_private_tools
+    if not shared_ok:
+        notes.append("retrieve_docs, github_read, gmail_read and drive_read are off: SHARED_PRIVATE_TOOLS is not 1 (they use one set of credentials, and every user could reach them)")
+    if not shared_ok:
+        pass
+    elif settings.docs_dir:
         if private_ok:
             index = DocIndex(settings.docs_dir)
             tools.append(RetrieveDocs(index))
@@ -48,7 +62,9 @@ async def build_registry(settings: Settings) -> Tuple[ToolRegistry, List[str]]:
     else:
         notes.append("retrieve_docs is off: DOCS_DIR is not set")
 
-    if settings.github_token and settings.github_repo_allowlist:
+    if not shared_ok:
+        pass
+    elif settings.github_token and settings.github_repo_allowlist:
         if private_ok:
             tools.append(GitHubRead(settings.github_token, settings.github_repo_allowlist, settings.github_allowed_refs, settings.github_allow_any_ref))
         else:
@@ -56,7 +72,9 @@ async def build_registry(settings: Settings) -> Tuple[ToolRegistry, List[str]]:
     else:
         notes.append("github_read is off: GITHUB_TOKEN or GITHUB_REPO_ALLOWLIST is not set")
 
-    if settings.google_client_id and settings.google_client_secret and settings.google_refresh_token:
+    if not shared_ok:
+        pass
+    elif settings.google_client_id and settings.google_client_secret and settings.google_refresh_token:
         if private_ok:
             from ..google_auth import GoogleAuth
             from .drive import DriveRead

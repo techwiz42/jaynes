@@ -1,20 +1,111 @@
 import { EVENT_TYPES, parseEvent, type ChatEvent } from "./events";
 
-export async function createSession(): Promise<string> {
-  const response = await fetch("/sessions", { method: "POST" });
-  if (!response.ok) throw new Error(`could not start a session (${response.status})`);
-  const body = (await response.json()) as { session_id: string };
-  return body.session_id;
+/** A request the server refused. `message` is the server's own explanation when it gave one. */
+export class ApiError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+async function request<T>(path: string, init: RequestInit = {}, fallback = "the request failed"): Promise<T> {
+  const response = await fetch(path, { credentials: "same-origin", ...init });
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const body = (await response.json()) as { detail?: unknown };
+      if (typeof body.detail === "string") detail = body.detail;
+    } catch {
+      /* not JSON: the fallback says enough */
+    }
+    throw new ApiError(response.status, detail || `${fallback} (${response.status})`);
+  }
+  return (await response.json().catch(() => ({}))) as T;
+}
+
+const json = (method: string, body: unknown): RequestInit => ({ method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+
+// ---- accounts ---------------------------------------------------------------------------------------------------------------------------------------------
+
+export interface Account {
+  email: string;
+}
+
+/** The logged-in user, or null when nobody is logged in. */
+export async function currentUser(): Promise<Account | null> {
+  try {
+    return await request<Account>("/auth/me");
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) return null;
+    throw error;
+  }
+}
+
+export const register = (email: string, password: string): Promise<Account> => request("/auth/register", json("POST", { email, password }), "could not register");
+export const login = (email: string, password: string): Promise<Account> => request("/auth/login", json("POST", { email, password }), "could not log in");
+export const logout = (): Promise<unknown> => request("/auth/logout", { method: "POST" });
+export const deleteAccount = (password: string): Promise<unknown> => request("/auth/delete-account", json("POST", { password }), "could not delete the account");
+
+// ---- conversations ----------------------------------------------------------------------------------------------------------------------------------------
+
+export interface StartedSession {
+  sessionId: string;
+  conversationId: string;
+  /** True when a session for this conversation was already running, so its events replay everything and the saved messages must not be loaded again. */
+  live: boolean;
+}
+
+export async function createSession(conversationId?: string): Promise<StartedSession> {
+  const body = await request<{ session_id: string; conversation_id: string; live?: boolean }>(
+    "/sessions",
+    conversationId ? json("POST", { conversation_id: conversationId }) : { method: "POST" },
+    "could not start a session",
+  );
+  return { sessionId: body.session_id, conversationId: body.conversation_id, live: Boolean(body.live) };
 }
 
 export async function sendMessage(sessionId: string, text: string): Promise<void> {
-  const response = await fetch(`/sessions/${sessionId}/messages`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text }),
-  });
-  if (!response.ok) throw new Error(`the message was not accepted (${response.status})`);
+  await request(`/sessions/${sessionId}/messages`, json("POST", { text }), "the message was not accepted");
 }
+
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  updated_at: number;
+}
+
+export interface SavedMessage {
+  role: "user" | "assistant";
+  text: string;
+  created_at: number;
+}
+
+export const listConversations = (): Promise<ConversationSummary[]> => request("/conversations");
+export const conversationMessages = (id: string): Promise<SavedMessage[]> => request(`/conversations/${id}/messages`);
+export const deleteConversation = (id: string): Promise<unknown> => request(`/conversations/${id}`, { method: "DELETE" }, "could not delete the conversation");
+
+// ---- memory: documents and notes --------------------------------------------------------------------------------------------------------------------------
+
+export interface MemoryEntry {
+  id: string;
+  title: string;
+  created_at: number;
+  pieces: number;
+  chars: number;
+}
+
+export const listDocuments = (): Promise<MemoryEntry[]> => request("/memory/documents");
+export const listNotes = (): Promise<MemoryEntry[]> => request("/memory/notes");
+export const deleteDocument = (id: string): Promise<unknown> => request(`/memory/documents/${id}`, { method: "DELETE" }, "could not delete the document");
+export const deleteNote = (id: string): Promise<unknown> => request(`/memory/notes/${id}`, { method: "DELETE" }, "could not delete the note");
+export const addNote = (title: string, text: string): Promise<unknown> => request("/memory/notes", json("POST", { title, text }), "could not save the note");
+
+export const uploadDocument = (file: File): Promise<unknown> =>
+  request(`/memory/documents?name=${encodeURIComponent(file.name)}`, { method: "POST", body: file, headers: { "content-type": "application/octet-stream" } }, "could not upload the document");
+
+// ---- the live event stream --------------------------------------------------------------------------------------------------------------------------------
 
 export interface EventConnection {
   close(): void;
@@ -31,6 +122,7 @@ export function connectEvents(
   lastId: () => number,
   onEvent: (event: ChatEvent) => void,
   onStatus: (connected: boolean) => void,
+  onLoggedOut: () => void = () => undefined,
 ): EventConnection {
   let source: EventSource | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -42,7 +134,18 @@ export function connectEvents(
     source.onerror = () => {
       onStatus(false);
       source?.close();
-      if (!closed) timer = setTimeout(open, RECONNECT_DELAY_MS);
+      if (closed) return;
+      // An EventSource cannot see why it failed. Ask whether the login is still good before trying again, so a logged-out page does not retry forever.
+      void currentUser().then(
+        (user) => {
+          if (closed) return;
+          if (user) timer = setTimeout(open, RECONNECT_DELAY_MS);
+          else onLoggedOut();
+        },
+        () => {
+          if (!closed) timer = setTimeout(open, RECONNECT_DELAY_MS);
+        },
+      );
     };
     for (const type of EVENT_TYPES) {
       source.addEventListener(type, (message) => {

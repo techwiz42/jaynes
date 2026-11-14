@@ -1,16 +1,25 @@
 import asyncio
+import os
+import tempfile
 
 import httpx
 import pytest
 
 from bicameral.server import create_app
+from bicameral.store import Store
 
 from .fakes import OK, RETRACT, FakeActor, FakeObserver
 
 
 def client(actor, observer):
-    app = create_app(actor, observer)
+    store = Store(os.path.join(tempfile.mkdtemp(), "jaynes.db"))
+    app = create_app(actor, observer, store)
     return app, httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+
+
+async def join(http, email="a@example.com", password="correct horse battery"):
+    response = await http.post("/auth/register", json={"email": email, "password": password})
+    assert response.status_code == 201
 
 
 async def settle(app, session_id):
@@ -25,6 +34,7 @@ async def settle(app, session_id):
 async def test_a_message_is_accepted_with_202_and_the_events_follow():
     app, http = client(FakeActor("Hello"), FakeObserver(OK))
     async with http:
+        await join(http)
         session_id = (await http.post("/sessions")).json()["session_id"]
         response = await http.post(f"/sessions/{session_id}/messages", json={"text": "hi"})
         assert response.status_code == 202
@@ -38,6 +48,7 @@ async def test_a_message_is_accepted_with_202_and_the_events_follow():
 async def test_events_resume_after_an_id_from_the_query_or_the_header():
     app, http = client(FakeActor("Hello"), FakeObserver(OK))
     async with http:
+        await join(http)
         session_id = (await http.post("/sessions")).json()["session_id"]
         await http.post(f"/sessions/{session_id}/messages", json={"text": "hi"})
         session = await settle(app, session_id)
@@ -51,6 +62,7 @@ async def test_events_resume_after_an_id_from_the_query_or_the_header():
 async def test_a_retraction_shows_up_on_the_wire():
     app, http = client(FakeActor("wrong", "right"), FakeObserver(RETRACT))
     async with http:
+        await join(http)
         session_id = (await http.post("/sessions")).json()["session_id"]
         await http.post(f"/sessions/{session_id}/messages", json={"text": "when?"})
         for _ in range(100):
@@ -65,6 +77,7 @@ async def test_a_retraction_shows_up_on_the_wire():
 async def test_bad_requests():
     app, http = client(FakeActor(), FakeObserver())
     async with http:
+        await join(http)
         assert (await http.post("/sessions/nope/messages", json={"text": "hi"})).status_code == 404
         assert (await http.get("/sessions/nope/events")).status_code == 404
         session_id = (await http.post("/sessions")).json()["session_id"]
@@ -75,5 +88,6 @@ async def test_bad_requests():
 async def test_healthz_counts_sessions_and_turns():
     app, http = client(FakeActor(), FakeObserver())
     async with http:
+        await join(http)
         await http.post("/sessions")
         assert (await http.get("/healthz")).json() == {"ok": True, "sessions": 1, "turns_in_progress": 0, "tools": [], "tools_off": []}

@@ -1,0 +1,50 @@
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it } from "vitest";
+import { AuthForm } from "./Auth";
+import { relativeTime, Sidebar } from "./Sidebar";
+
+describe("the login form", () => {
+  it("starts on logging in, with a way to register", () => {
+    const html = renderToStaticMarkup(<AuthForm onAuthenticated={() => undefined} />);
+    expect(html).toContain('aria-label="Log in"');
+    expect(html).toContain("current-password");
+    expect(html).toContain("Create an account");
+    expect(html).not.toContain("At least 10 characters");
+  });
+});
+
+describe("the conversation list", () => {
+  const conversations = [
+    { id: "a", title: "Trip to Oslo", updated_at: 1_000 },
+    { id: "b", title: "<script>alert(1)</script>", updated_at: 500 },
+  ];
+  const render = (current: string | null) =>
+    renderToStaticMarkup(<Sidebar conversations={conversations} current={current} onOpen={() => undefined} onNew={() => undefined} onDelete={() => undefined} />);
+
+  it("lists them and marks the open one", () => {
+    const html = render("a");
+    expect(html).toContain("Trip to Oslo");
+    expect(html).toContain('aria-current="true"');
+    expect(html).toContain("New conversation");
+  });
+
+  it("shows a title as text, never as markup", () => {
+    const html = render(null);
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("&lt;script&gt;");
+  });
+
+  it("says when there is nothing saved", () => {
+    const html = renderToStaticMarkup(<Sidebar conversations={[]} current={null} onOpen={() => undefined} onNew={() => undefined} onDelete={() => undefined} />);
+    expect(html).toContain("Nothing saved yet.");
+  });
+});
+
+describe("relativeTime", () => {
+  it("speaks in minutes and hours, then dates", () => {
+    expect(relativeTime(1000, 1010)).toBe("just now");
+    expect(relativeTime(1000, 1000 + 5 * 60)).toBe("5 min ago");
+    expect(relativeTime(1000, 1000 + 3 * 3600)).toBe("3 h ago");
+    expect(relativeTime(1000, 1000 + 3 * 86400)).toMatch(/\d/);
+  });
+});

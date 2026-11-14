@@ -100,20 +100,28 @@ Keys come from the environment and never go in this repository. A `.env.example`
 | `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) | Actor |
 | `ANTHROPIC_API_KEY` | Observer |
 | `ACTOR_MODEL`, `OBSERVER_MODEL` | Optional model overrides |
+| `DATA_DIR` | Where the database (users, conversations, memory) lives; `deploy/run.sh` defaults it to `~/jaynes/data` |
+| `COOKIE_SECURE`, `MAX_UPLOAD_BYTES`, `SHARED_PRIVATE_TOOLS` | See [`docs/users-and-memory.md`](docs/users-and-memory.md) |
 
 ## Tools
 
 The actor can use read-only tools: `web_fetch`, `web_search` (Tavily), `python_sandbox`, `retrieve_docs` (your Markdown files), `github_read` (allowlisted private repositories), and `gmail_read` and `drive_read` (your Gmail and Google Drive). Each is off unless its configuration is set, and the ones that read private content also need `ALLOW_PRIVATE_EGRESS=1`, because their results go to Google and Anthropic. Once a conversation has read private data, web search and fetch are refused for the rest of it, so nothing can be sent out. Tool calls appear as small badges in the conversation, and the observer is shown the full tool trace so it can check the draft against what the tools returned. See [`docs/tools.md`](docs/tools.md) for the configuration, the data-egress decision, the defences (private-content guard, prompt-injection handling, SSRF protection, audit log) and the sandbox's limits.
 
+## Accounts and memory
+
+People register with an email and a password (registration is open) and log in; everything else needs the login. Each user's conversations are saved, listed in a sidebar and can be continued after a restart. Each user also has a **private memory**: their past conversations, documents they upload (PDF, text, Markdown, CSV, JSON) and notes (written in the page, or "remember that…" said to Jaynes). Two tools, `memory_search` and `memory_save`, work on the logged-in user's memory only: the user is taken from the login, never from anything the model says, and every query filters on it in the SQL. A user cannot see, search, continue or delete anyone else's conversations, documents or notes, and can delete their whole account with its data. Search is SQLite's full-text index with BM25 ranking, so nothing is sent to another service to index or search.
+
+Searching memory returns the user's private content to the model providers, so the memory tools need `ALLOW_PRIVATE_EGRESS=1` and count as reading private data (web search and fetch are refused for the rest of that conversation). The Gmail, Drive, GitHub and local-docs tools use one set of credentials, so with accounts they are **off** unless `SHARED_PRIVATE_TOOLS=1`. See [`docs/users-and-memory.md`](docs/users-and-memory.md) for the security model, the limits and the deployment.
+
 ## Access and limits
 
-There is no authentication, and none is planned for the first version, so **the service must not be reachable from the internet**. It runs on a machine on the local network and is used through an SSH port-forward (see the run plan). Because it is private, there are no rate limits or spend ceiling in the app; set budget alerts with the model providers instead.
+The service is still meant for a private network: **it must not be reachable from the internet**. It runs on a machine on the local network and is used through an SSH port-forward (see the run plan). Accounts keep users apart, but registration is open, so anyone who can reach the page can make an account and spend your model quota; there is no spend ceiling in the app, so set budget alerts with the model providers.
 
 ## Out of scope for now
 
 - Blocking a reply before delivery (hold-and-release).
-- Authentication, persistence beyond process memory, multi-user support.
-- A vector store or embeddings (`retrieve_docs` is a local keyword index).
+- Email verification, password reset and two-factor login.
+- A vector store or embeddings (memory and `retrieve_docs` are keyword indexes).
 
 ## Layout
 

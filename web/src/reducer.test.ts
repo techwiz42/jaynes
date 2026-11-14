@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatEvent } from "./events";
-import { describeTarget, initialState, isStreaming, reduce, reviewOf, type AssistantItem, type ChatState } from "./reducer";
+import { describeTarget, initialState, isActorWorking, isStreaming, reduce, reduceAction, reviewOf, type AssistantItem, type ChatState } from "./reducer";
 
 let counter = 0;
 const id = (): number => ++counter;
@@ -187,5 +187,62 @@ describe("private data", () => {
 
   it("starts empty", () => {
     expect(initialState.privateTools).toEqual([]);
+  });
+});
+
+describe("a continued conversation", () => {
+  it("shows the saved messages before anything that arrives live, and they cannot collide with event ids", () => {
+    const live = reduceAction(initialState, { id: 1, type: "user_message", text: "and now?" });
+    const withSaved = reduceAction(live, { type: "history", messages: [{ role: "user", text: "first" }, { role: "assistant", text: "an answer" }] });
+    expect(withSaved.items.map((item) => (item.kind === "user" ? item.text : item.kind === "assistant" ? item.text : item.kind))).toEqual(["first", "an answer", "and now?"]);
+    const assistant = withSaved.items[1] as AssistantItem;
+    expect(assistant.kind).toBe("assistant");
+    expect(assistant.complete && !assistant.contested).toBe(true);
+    expect(withSaved.lastEventId).toBe(1);                              // history is not an event: replays still start where they were
+    expect(reduceAction(withSaved, { id: 1, type: "user_message", text: "and now?" })).toBe(withSaved);          // and a replayed event is still ignored
+  });
+
+  it("is a no-op for an empty history", () => {
+    expect(reduceAction(initialState, { type: "history", messages: [] }).items).toEqual([]);
+  });
+});
+
+describe("isActorWorking", () => {
+  const user = (id: number): ChatEvent => ({ id, type: "user_message", text: "hi" });
+  const token = (id: number, messageId: string, kind: "draft" | "correction" = "draft"): ChatEvent => ({ id, type: "token", message_id: messageId, kind, text: "word " });
+  const complete = (id: number, messageId: string): ChatEvent => ({ id, type: "draft_complete", message_id: messageId, text: "word" });
+  const run = (events: ChatEvent[]) => events.reduce(reduce, initialState);
+
+  it("is off before anything is said and while idle", () => {
+    expect(isActorWorking(initialState)).toBe(false);
+  });
+
+  it("is on from the moment a message is sent, before the first word", () => {
+    expect(isActorWorking(run([user(1)]))).toBe(true);
+  });
+
+  it("stays on while the reply streams, and while a tool runs before it", () => {
+    expect(isActorWorking(run([user(1), token(2, "m1")]))).toBe(true);
+    const tool: ChatEvent = { id: 2, type: "tool_call", turn_id: "t1", call_id: "c1", tool: "web_fetch", args: { url: "https://x.example" } };
+    expect(isActorWorking(run([user(1), tool]))).toBe(true);
+  });
+
+  it("goes off when the reply is finished, even while the observer is still reading it", () => {
+    expect(isActorWorking(run([user(1), token(2, "m1"), complete(3, "m1")]))).toBe(false);
+  });
+
+  it("comes back on when the observer retracts it, and goes off when the correction is finished", () => {
+    const retracted = run([user(1), token(2, "m1"), complete(3, "m1"), { id: 4, type: "retraction", message_id: "m1", issues: ["wrong"], text: "word" }]);
+    expect(isActorWorking(retracted)).toBe(true);
+    const corrected = [token(5, "m2", "correction"), complete(6, "m2")].reduce(reduce, retracted);
+    expect(isActorWorking(corrected)).toBe(false);
+  });
+
+  it("is off after an error, so the dots never spin on a turn that has ended", () => {
+    expect(isActorWorking(run([user(1), { id: 2, type: "error", where: "actor", message: "down" }]))).toBe(false);
+  });
+
+  it("only looks at the latest message", () => {
+    expect(isActorWorking(run([user(1), token(2, "m1"), complete(3, "m1"), user(4)]))).toBe(true);
   });
 });
