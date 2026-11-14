@@ -80,7 +80,8 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: 210px minma
 .issues { margin: 6px 0 0; padding-left: 18px; font-size: 0.85rem; color: var(--note); }
 .composer { display: flex; gap: 8px; align-items: flex-end; padding-top: 10px; }
 .brand { display: flex; align-items: center; gap: 8px; }
-.brand .brain { flex: none; }
+.brand .brain { flex: none; display: block; }
+@media (prefers-color-scheme: dark) { .brain { filter: invert(1); } }   /* dark lines on a clear background become light lines */
 .field { position: relative; flex: 1; display: flex; }
 .field textarea { flex: 1; }
 .field textarea.working { padding-right: 56px; }

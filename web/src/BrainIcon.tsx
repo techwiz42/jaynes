@@ -1,19 +1,7 @@
-import { BRAIN_VIEWBOX, LEFT_FOLDS, LEFT_LOBE, MIRROR } from "./brain";
+/** The Jaynes logo (bicameral_brain.png): a brain seen from above, two hemispheres joined by circuitry. The header copy has a transparent background, so it sits on the page in either theme. */
+export const LOGO_URL = "/bicameral_brain_transparent.png";
+const ASPECT = 208 / 216;           // the image's width over its height
 
-/** The brain, from above: two hemispheres and the fissure between them. Drawn in the text colour, so it follows light and dark mode. */
 export function BrainIcon({ size = 24 }: { size?: number }) {
-  const hemisphere = (
-    <>
-      <path d={LEFT_LOBE} />
-      {LEFT_FOLDS.map((fold) => (
-        <path key={fold} d={fold} />
-      ))}
-    </>
-  );
-  return (
-    <svg className="brain" width={size} height={size} viewBox={BRAIN_VIEWBOX} fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" role="img" aria-label="Jaynes">
-      <g>{hemisphere}</g>
-      <g transform={MIRROR}>{hemisphere}</g>
-    </svg>
-  );
+  return <img className="brain" src={LOGO_URL} width={Math.round(size * ASPECT)} height={size} alt="Jaynes" />;
 }
