@@ -34,7 +34,7 @@ async def test_tool_events_are_logged_in_order_with_the_turn_id_and_no_output():
     assert [e.type for e in session.log.replay()] == ["user_message", "tool_call", "tool_result", "token", "token", "draft_complete", "observer_verdict"]
     call, result = events(session, "tool_call")[0], events(session, "tool_result")[0]
     assert call.data == {"turn_id": "t1", "call_id": "c1", "tool": "github_read", "args": {"path": "src/a.py"}}
-    assert result.data == {"turn_id": "t1", "call_id": "c1", "tool": "github_read", "ok": True, "summary": "read src/a.py (40 lines)", "truncated": False}
+    assert result.data == {"turn_id": "t1", "call_id": "c1", "tool": "github_read", "ok": True, "summary": "read src/a.py (40 lines)", "truncated": False, "private": False}
     assert "the full file contents" not in str([e.data for e in session.log.replay()])           # the page never receives the output
 
 

@@ -146,7 +146,7 @@ class GeminiActor:
                     output = result.content if result.ok else result.error
                     result_text = output
                     turn.trace.append(TraceItem(call_id, name, shown, ok, output, truncated))
-                    yield ToolResultEvent(call_id, name, ok, result.summary or (output[:100] if not ok else "done"), truncated)
+                    yield ToolResultEvent(call_id, name, ok, result.summary or (output[:100] if not ok else "done"), truncated, result.private)
                 response_part = types.Part.from_function_response(name=name, response={"result": wrap_untrusted(name, result_text)})
                 if getattr(call, "id", None):
                     response_part.function_response.id = call.id

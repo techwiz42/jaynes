@@ -47,6 +47,7 @@ class GitHubRead(Tool):
                    "Only repositories on the configured allowlist work. When you rely on a file, cite its repository and path.")
     args_model = GitHubArgs
     timeout_seconds = 20.0
+    private = True
     max_output_chars = 20000
 
     def __init__(self, token: str, allowlist: Sequence[str], allowed_refs: Sequence[str] = (), allow_any_ref: bool = False,

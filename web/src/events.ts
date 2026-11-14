@@ -65,6 +65,8 @@ export interface ToolResultEvent {
   /** One short line about what happened. Never the output itself, which can be private. */
   summary: string;
   truncated: boolean;
+  /** True when a private tool (mail, files, repositories) returned content: the conversation now holds private data. */
+  private?: boolean;
 }
 
 export interface ErrorEvent {

@@ -144,6 +144,7 @@ class RetrieveDocs(Tool):
                    "When you rely on a passage, cite its file path.")
     args_model = RetrieveDocsArgs
     timeout_seconds = 10.0
+    private = True
 
     def __init__(self, index: DocIndex) -> None:
         self._index = index

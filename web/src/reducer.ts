@@ -54,11 +54,13 @@ export interface Review {
 export interface ChatState {
   items: Item[];
   reviews: Review[];
+  /** The private tools this conversation has read from. While there are any, the server refuses web search and fetch. */
+  privateTools: string[];
   /** The id of the last event applied; events at or below it are ignored, so a replay after a reconnect cannot duplicate anything. */
   lastEventId: number;
 }
 
-export const initialState: ChatState = { items: [], reviews: [], lastEventId: 0 };
+export const initialState: ChatState = { items: [], reviews: [], privateTools: [], lastEventId: 0 };
 
 const TARGET_KEYS = ["url", "query", "repo", "path", "operation", "code"];
 
@@ -172,6 +174,7 @@ export function reduce(state: ChatState, event: ChatEvent): ChatState {
 
     case "tool_result":
       return next({
+        privateTools: event.private && event.ok && !state.privateTools.includes(event.tool) ? [...state.privateTools, event.tool] : state.privateTools,
         items: state.items.map((item) =>
           item.kind === "tool" && item.turnId === event.turn_id && item.callId === event.call_id
             ? { ...item, status: event.ok ? "ok" : "failed", summary: event.summary, truncated: event.truncated }

@@ -103,7 +103,7 @@ Keys come from the environment and never go in this repository. A `.env.example`
 
 ## Tools
 
-The actor can use read-only tools: `web_fetch`, `web_search` (Tavily), `python_sandbox`, `retrieve_docs` (your Markdown files) and `github_read` (allowlisted private repositories). Each is off unless its configuration is set, and the two that read private content also need `ALLOW_PRIVATE_EGRESS=1`, because their results go to Google and Anthropic. Tool calls appear as small badges in the conversation, and the observer is shown the full tool trace so it can check the draft against what the tools returned. See [`docs/tools.md`](docs/tools.md) for the configuration, the data-egress decision, the defences (private-content guard, prompt-injection handling, SSRF protection, audit log) and the sandbox's limits.
+The actor can use read-only tools: `web_fetch`, `web_search` (Tavily), `python_sandbox`, `retrieve_docs` (your Markdown files), `github_read` (allowlisted private repositories), and `gmail_read` and `drive_read` (your Gmail and Google Drive). Each is off unless its configuration is set, and the ones that read private content also need `ALLOW_PRIVATE_EGRESS=1`, because their results go to Google and Anthropic. Once a conversation has read private data, web search and fetch are refused for the rest of it, so nothing can be sent out. Tool calls appear as small badges in the conversation, and the observer is shown the full tool trace so it can check the draft against what the tools returned. See [`docs/tools.md`](docs/tools.md) for the configuration, the data-egress decision, the defences (private-content guard, prompt-injection handling, SSRF protection, audit log) and the sandbox's limits.
 
 ## Access and limits
 

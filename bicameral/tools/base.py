@@ -24,6 +24,7 @@ class ToolResult:
     content: str = ""                     # what the model is given (inside the untrusted wrapper)
     error: str = ""
     truncated: bool = False
+    private: bool = False                 # set by the registry: a private tool returned content
     summary: str = ""                     # one short line for the page; never the contents
     meta: Dict[str, Any] = field(default_factory=dict)       # for the audit log: target (repo, url, path), counts. Never contents.
 
@@ -39,6 +40,7 @@ class Tool:
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS
     max_output_chars: int = DEFAULT_MAX_OUTPUT_CHARS
     outgoing: bool = False                # True when part of the arguments leaves this machine for a third party (a query, a URL): the private-content guard checks it
+    private: bool = False                 # True when results are the user's private content (mail, files, repositories): once one has been read, outgoing tools are refused
 
     def schema(self) -> Dict[str, Any]:
         return clean_schema(self.args_model.model_json_schema())
@@ -78,6 +80,7 @@ class ToolResultEvent:
     ok: bool
     summary: str
     truncated: bool
+    private: bool = False                 # a private tool returned content: the conversation now holds private data
 
 
 @dataclass
@@ -92,12 +95,28 @@ class TraceItem:
 
 
 @dataclass
+class Taint:
+    """Whether a conversation has read private content. Shared by every turn of a session, because what was read stays in the conversation (in the model's replies) and
+    could be carried out by text in something read later. Once set, outgoing tools (web search and fetch) are refused until a new conversation starts."""
+    tools: List[str] = field(default_factory=list)
+
+    @property
+    def tainted(self) -> bool:
+        return bool(self.tools)
+
+    def mark(self, tool: str) -> None:
+        if tool not in self.tools:
+            self.tools.append(tool)
+
+
+@dataclass
 class TurnContext:
     session_id: str
     turn_id: str
     max_calls: int = 5
     calls_used: int = 0
     trace: List[TraceItem] = field(default_factory=list)
+    taint: Taint = field(default_factory=Taint)
 
     def next_call_id(self) -> str:
         self.calls_used += 1
@@ -118,6 +137,7 @@ class ToolRegistry:
         self._guard = guard
         self._audit = audit
         self._secrets = tuple(s for s in secrets if s)
+        self._secret_sources: List[Any] = []
 
     @property
     def names(self) -> List[str]:
@@ -129,10 +149,20 @@ class ToolRegistry:
     def declarations(self) -> List[Dict[str, Any]]:
         return [{"name": t.name, "description": t.description, "parameters": t.schema()} for t in self._tools.values()]
 
+    def add_secret_source(self, source: Any) -> None:
+        """Something with a secrets() method, for secrets that change while running (an access token that is renewed)."""
+        self._secret_sources.append(source)
+
+    def _all_secrets(self) -> List[str]:
+        found = list(self._secrets)
+        for source in self._secret_sources:
+            found.extend(s for s in source.secrets() if s)
+        return found
+
     def scrub(self, value: Any) -> Any:
         """Replace any known secret that appears in a string, a list or a dict."""
         if isinstance(value, str):
-            for secret in self._secrets:
+            for secret in self._all_secrets():
                 value = value.replace(secret, "[redacted]")
             return value
         if isinstance(value, dict):
@@ -145,7 +175,10 @@ class ToolRegistry:
         started = time.monotonic()
         tool = self._tools.get(name)
         args_for_log: Dict[str, Any] = self.scrub(raw_args) if isinstance(raw_args, dict) else {}
-        result = await self._run(tool, name, raw_args)
+        result = await self._run(tool, name, raw_args, ctx)
+        if tool is not None and tool.private and result.ok and ctx is not None:
+            ctx.taint.mark(name)
+            result.private = True
         result.content = self.scrub(result.content)
         result.error = self.scrub(result.error)
         result.summary = self.scrub(result.summary)
@@ -160,7 +193,7 @@ class ToolRegistry:
                 logging.getLogger(__name__).error("audit log write failed for tool %s", name)
         return result
 
-    async def _run(self, tool: Optional[Tool], name: str, raw_args: Any) -> ToolResult:
+    async def _run(self, tool: Optional[Tool], name: str, raw_args: Any, ctx: Optional[TurnContext] = None) -> ToolResult:
         if tool is None:
             return ToolResult.failure(f"unknown tool: {name[:60]}")
         if not isinstance(raw_args, dict):
@@ -171,6 +204,9 @@ class ToolRegistry:
             first = error.errors()[0]
             where = ".".join(str(part) for part in first.get("loc", ())) or "arguments"
             return ToolResult.failure(f"invalid arguments: {where}: {first.get('msg', 'invalid')}"[:200])
+        if tool.outgoing and ctx is not None and ctx.taint.tainted:
+            return ToolResult.failure("refused: this conversation has read private data (" + ", ".join(ctx.taint.tools) + "), so outgoing requests are blocked for the rest of it; "
+                                      "tell the user they can start a new conversation to use web search or fetch")
         if tool.outgoing and self._guard is not None:
             blocked = self._guard.check(tool.outgoing_text(args))
             if blocked:

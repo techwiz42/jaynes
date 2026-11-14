@@ -39,9 +39,15 @@ class Settings:
     max_tool_calls_per_turn: int = 5                # MAX_TOOL_CALLS_PER_TURN
     allow_private_egress: bool = False              # ALLOW_PRIVATE_EGRESS=1: private repository and document content may go to the model providers (see README)
     audit_log: str = "audit.jsonl"                  # AUDIT_LOG: where every tool call is recorded (never the contents)
+    google_client_id: str = ""                      # GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN: read-only Gmail and Drive (scripts/google-auth.py sets them up)
+    google_client_secret: str = ""
+    google_refresh_token: str = ""
+    gmail_exclude_labels: Tuple[str, ...] = ()      # GMAIL_EXCLUDE_LABELS: label names whose messages are never shown
+    gmail_exclude_senders: Tuple[str, ...] = ()     # GMAIL_EXCLUDE_SENDERS: text in a From address that hides the message
+    drive_exclude_terms: Tuple[str, ...] = ()       # DRIVE_EXCLUDE_TERMS: text in a file name that hides the file
 
     def secrets(self) -> Tuple[str, ...]:
-        return tuple(v for v in (self.gemini_api_key, self.anthropic_api_key, self.search_api_key, self.github_token) if v)
+        return tuple(v for v in (self.gemini_api_key, self.anthropic_api_key, self.search_api_key, self.github_token, self.google_client_secret, self.google_refresh_token) if v)
 
     def __repr__(self) -> str:
         return (f"Settings(actor_model={self.actor_model!r}, observer_model={self.observer_model!r}, keys=<set>, "
@@ -83,4 +89,10 @@ class Settings:
             max_tool_calls_per_turn=int(raw_calls),
             allow_private_egress=_flag(env.get("ALLOW_PRIVATE_EGRESS")),
             audit_log=(env.get("AUDIT_LOG") or "audit.jsonl").strip(),
+            google_client_id=(env.get("GOOGLE_CLIENT_ID") or "").strip(),
+            google_client_secret=(env.get("GOOGLE_CLIENT_SECRET") or "").strip(),
+            google_refresh_token=(env.get("GOOGLE_REFRESH_TOKEN") or "").strip(),
+            gmail_exclude_labels=_list(env.get("GMAIL_EXCLUDE_LABELS")),
+            gmail_exclude_senders=_list(env.get("GMAIL_EXCLUDE_SENDERS")),
+            drive_exclude_terms=_list(env.get("DRIVE_EXCLUDE_TERMS")),
         )

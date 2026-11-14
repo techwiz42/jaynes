@@ -8,7 +8,7 @@ from typing import List, Optional
 from .actor import ACTOR_SYSTEM, Actor, ActorError, Message
 from .events import EventLog
 from .observer import Observer, ObserverError, Verdict
-from .tools.base import ToolCallEvent, ToolResultEvent, TurnContext
+from .tools.base import Taint, ToolCallEvent, ToolResultEvent, TurnContext
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +29,7 @@ class Session:
         self.max_tool_calls = max_tool_calls
         self._turn_count = 0
         self._turn: Optional[TurnContext] = None
+        self.taint = Taint()                                  # lasts as long as the conversation
         self.log = EventLog()
         self.history: List[Message] = []
         self._lock = asyncio.Lock()
@@ -50,7 +51,7 @@ class Session:
             if isinstance(item, ToolCallEvent):
                 self.log.append("tool_call", turn_id=turn.turn_id if turn else "", call_id=item.call_id, tool=item.tool, args=item.args)
             elif isinstance(item, ToolResultEvent):
-                self.log.append("tool_result", turn_id=turn.turn_id if turn else "", call_id=item.call_id, tool=item.tool, ok=item.ok, summary=item.summary, truncated=item.truncated)
+                self.log.append("tool_result", turn_id=turn.turn_id if turn else "", call_id=item.call_id, tool=item.tool, ok=item.ok, summary=item.summary, truncated=item.truncated, private=item.private)
             elif item:
                 parts.append(item)
                 self.log.append("token", message_id=message_id, kind=kind, text=item, **extra)
@@ -63,7 +64,7 @@ class Session:
         """One turn. Turns are serialised: a second message waits for the first to finish."""
         async with self._lock:
             self._turn_count += 1
-            self._turn = TurnContext(self.id, f"t{self._turn_count}", self.max_tool_calls)
+            self._turn = TurnContext(self.id, f"t{self._turn_count}", self.max_tool_calls, taint=self.taint)
             self.history.append({"role": "user", "content": text})
             self.log.append("user_message", text=text)
 

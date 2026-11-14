@@ -8,7 +8,7 @@ Event types (the frontend's discriminated union must match these; change both in
   observer_verdict  message_id, verdict ("ok" | "retract"), severity, issues, correction_guidance
   retraction        message_id, issues, text (the retracted draft)
   tool_call         turn_id, call_id, tool, args (secrets removed)
-  tool_result       turn_id, call_id, tool, ok, summary, truncated (the summary only: never the output, which can be private; the full output goes to the actor and the observer)
+  tool_result       turn_id, call_id, tool, ok, summary, truncated, private (true when a private tool returned content: the conversation now holds private data) (the summary only: never the output, which can be private; the full output goes to the actor and the observer)
   error             where ("actor" | "observer" | "actor_correction"), message
 """
 from __future__ import annotations

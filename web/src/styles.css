@@ -35,6 +35,8 @@ h1 { margin: 0; font-size: 1.2rem; }
 h2 { margin: 0 0 8px; font-size: 1rem; }
 .status { font-size: 0.85rem; color: var(--muted); }
 .status.on { color: var(--ok); }
+.private { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; justify-content: space-between; margin-top: 8px; padding: 6px 12px; border: 1px solid var(--note); border-radius: 6px; background: var(--note-bg); color: var(--note); font-size: 0.85rem; }
+.private button { padding: 3px 10px; font: inherit; color: inherit; background: none; border: 1px solid currentColor; border-radius: 6px; cursor: pointer; }
 .problem { margin-top: 8px; padding: 8px 12px; border-radius: 6px; background: var(--warn-bg); color: var(--warn); }
 main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; padding: 12px 0 16px; }
 .chat { display: flex; flex-direction: column; min-height: 0; }

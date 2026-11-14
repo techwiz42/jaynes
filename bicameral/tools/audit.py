@@ -9,7 +9,7 @@ import time
 from typing import Any, Dict
 
 # Argument values worth keeping whole: short identifiers of what was asked for. Anything else (code the model wrote, say) is recorded only as a length and a hash.
-KEEP_WHOLE = {"query", "url", "repo", "path", "ref", "operation", "number", "state", "k", "max_results", "max_chars", "start_line", "end_line"}
+KEEP_WHOLE = {"message_id", "file_id", "folder_id", "query", "url", "repo", "path", "ref", "operation", "number", "state", "k", "max_results", "max_chars", "start_line", "end_line"}
 MAX_VALUE_CHARS = 300
 
 

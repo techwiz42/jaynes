@@ -167,3 +167,25 @@ describe("tool calls", () => {
     expect(describeTarget({})).toBe("");
   });
 });
+
+describe("private data", () => {
+  const result = (call_id: string, tool: string, ok: boolean, priv?: boolean): ChatEvent => ({
+    id: id(), type: "tool_result", turn_id: "t1", call_id, tool, ok, summary: "x", truncated: false, ...(priv === undefined ? {} : { private: priv }),
+  });
+  const call = (call_id: string, tool: string): ChatEvent => ({ id: id(), type: "tool_call", turn_id: "t1", call_id, tool, args: {} });
+
+  it("notes which private tools the conversation has read from, once each", () => {
+    const state = run([call("c1", "gmail_read"), result("c1", "gmail_read", true, true), call("c2", "gmail_read"), result("c2", "gmail_read", true, true), call("c3", "drive_read"), result("c3", "drive_read", true, true)]);
+    expect(state.privateTools).toEqual(["gmail_read", "drive_read"]);
+  });
+
+  it("is not triggered by a failed call, a public tool, or an older server that does not send the flag", () => {
+    expect(run([call("c1", "gmail_read"), result("c1", "gmail_read", false, true)]).privateTools).toEqual([]);
+    expect(run([call("c1", "web_fetch"), result("c1", "web_fetch", true, false)]).privateTools).toEqual([]);
+    expect(run([call("c1", "web_fetch"), result("c1", "web_fetch", true)]).privateTools).toEqual([]);
+  });
+
+  it("starts empty", () => {
+    expect(initialState.privateTools).toEqual([]);
+  });
+});

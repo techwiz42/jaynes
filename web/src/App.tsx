@@ -172,6 +172,16 @@ export default function App() {
         <span className={`status ${connected ? "on" : "off"}`}>{!sessionId ? "starting…" : connected ? "connected" : "reconnecting…"}</span>
         {isStreaming(state) && <span className="status on">replying…</span>}
       </header>
+      {state.privateTools.length > 0 && (
+        <div className="private" role="status">
+          <span>
+            This conversation has read private data ({state.privateTools.join(", ")}). Web search and fetch are off for the rest of it, so nothing can be sent out. 
+          </span>
+          <button type="button" onClick={() => window.location.reload()}>
+            Start a new conversation
+          </button>
+        </div>
+      )}
       {problem && (
         <div className="problem" role="alert">
           {problem}
