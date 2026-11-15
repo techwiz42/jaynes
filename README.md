@@ -99,6 +99,7 @@ Keys come from the environment and never go in this repository. A `.env.example`
 | Variable | Meaning |
 | --- | --- |
 | `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) | Actor |
+| `USE_VERTEX=1`, `VERTEX_PROJECT`, `VERTEX_LOCATION` | The actor calls Gemini through Vertex AI as the machine's Google Cloud service account instead of with a key (no `GEMINI_API_KEY`; see `.env.example`) |
 | `ANTHROPIC_API_KEY` | Observer |
 | `ACTOR_MODEL`, `OBSERVER_MODEL` | Optional model overrides |
 | `DATA_DIR` | Where the database (users and conversations) lives; `deploy/run.sh` defaults it to `~/jaynes/data` |
