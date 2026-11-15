@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { ApiError, currentUser, deleteConversation, listConversations, logout, readAttachment, type Account, type Attachment, type ConversationSummary } from "./api";
+import { AccountPanel } from "./Account";
 import { AuthForm } from "./Auth";
 import { BrainIcon } from "./BrainIcon";
 import { Footer } from "./Footer";
 import { MarkdownText, plainText } from "./Markdown";
-import { MemoryPanel } from "./Memory";
 import { Sidebar } from "./Sidebar";
 import { isActorWorking, isStreaming, type AssistantItem, type ChatState, type Item, type Review, type ToolItem } from "./reducer";
 import { useChat } from "./useChat";
@@ -303,7 +303,7 @@ function Chat({
   onConversation: (id: string) => void;
 }) {
   const { state, sessionId, conversationId: started, connected, problem, send } = useChat(conversationId, onLoggedOut, onActivity);
-  const [memoryOpen, setMemoryOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
   useEffect(() => {
     if (started) onConversation(started);
   }, [started, onConversation]);
@@ -318,8 +318,8 @@ function Chat({
         {isStreaming(state) && <span className="status on">replying…</span>}
         <span className="spacer" />
         <span className="account">{account.email}</span>
-        <button type="button" className="quiet" onClick={() => setMemoryOpen(!memoryOpen)} aria-expanded={memoryOpen}>
-          Memory
+        <button type="button" className="quiet" onClick={() => setAccountOpen(!accountOpen)} aria-expanded={accountOpen}>
+          Account
         </button>
         <button type="button" className="quiet" onClick={onLogout}>
           Log out
@@ -346,7 +346,7 @@ function Chat({
           <Transcript state={state} />
           <Composer onSend={send} disabled={!sessionId} working={isActorWorking(state)} />
         </div>
-        {memoryOpen ? <MemoryPanel email={account.email} onClose={() => setMemoryOpen(false)} onAccountDeleted={onLoggedOut} /> : <ObserverPanel state={state} />}
+        {accountOpen ? <AccountPanel email={account.email} onClose={() => setAccountOpen(false)} onAccountDeleted={onLoggedOut} /> : <ObserverPanel state={state} />}
       </main>
       <Footer />
     </div>

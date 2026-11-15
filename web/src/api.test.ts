@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, addNote, createSession, currentUser, login, uploadDocument } from "./api";
+import { ApiError, createSession, currentUser, login, readAttachment } from "./api";
 
 function reply(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -25,7 +25,7 @@ describe("the API client", () => {
 
   it("falls back to a plain sentence when the server gave none", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("<html>bad gateway</html>", { status: 502 })));
-    await expect(addNote("t", "x")).rejects.toMatchObject({ status: 502, message: "could not save the note (502)" });
+    await expect(login("a@example.com", "x")).rejects.toMatchObject({ status: 502, message: "could not log in (502)" });
   });
 
   it("starts a new conversation without a body and continues one by id", async () => {
@@ -38,12 +38,12 @@ describe("the API client", () => {
     expect(JSON.parse(fetchMock.mock.calls[1]![1]?.body as string)).toEqual({ conversation_id: "c9" });
   });
 
-  it("sends a document's own bytes with its name in the query, never in a form", async () => {
-    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => reply(201, { id: "d1", title: "trip & plans.md" }));
+  it("sends a file's own bytes with its name in the query, never in a form", async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => reply(200, { name: "trip & plans.md", text: "# Trip", chars: 6, truncated: false }));
     vi.stubGlobal("fetch", fetchMock);
     const file = new File(["# Trip"], "trip & plans.md");
-    await uploadDocument(file);
-    expect(fetchMock.mock.calls[0]![0]).toBe("/memory/documents?name=trip%20%26%20plans.md");
+    await readAttachment(file);
+    expect(fetchMock.mock.calls[0]![0]).toBe("/attachments?name=trip%20%26%20plans.md");
     expect(fetchMock.mock.calls[0]![1]?.body).toBe(file);
   });
 });

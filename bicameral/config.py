@@ -46,10 +46,14 @@ class Settings:
     gmail_exclude_labels: Tuple[str, ...] = ()      # GMAIL_EXCLUDE_LABELS: label names whose messages are never shown
     gmail_exclude_senders: Tuple[str, ...] = ()     # GMAIL_EXCLUDE_SENDERS: text in a From address that hides the message
     drive_exclude_terms: Tuple[str, ...] = ()       # DRIVE_EXCLUDE_TERMS: text in a file name that hides the file
-    data_dir: str = "data"                          # DATA_DIR: where jaynes.db (users, conversations, memory) lives; created with mode 600 for the file
+    data_dir: str = "data"                          # DATA_DIR: where jaynes.db (users and conversations) lives; created with mode 600 for the file
     cookie_secure: bool = False                     # COOKIE_SECURE=1: mark the login cookie Secure (set it when the page is served over https)
     shared_private_tools: bool = False              # SHARED_PRIVATE_TOOLS=1: Gmail, Drive, GitHub and DOCS_DIR tools use one set of credentials, so with several users they stay off unless this is set
     max_upload_bytes: int = 10_000_000              # MAX_UPLOAD_BYTES: the largest document a user may upload
+    max_messages_per_hour: int = 30                 # MAX_MESSAGES_PER_HOUR: per user; 0 for no limit (likewise the three below)
+    max_user_tokens_per_day: int = 300_000          # MAX_USER_TOKENS_PER_DAY: estimated, per user, per UTC day
+    max_global_tokens_per_day: int = 3_000_000      # MAX_GLOBAL_TOKENS_PER_DAY: estimated, everybody together; Jaynes rests until midnight UTC when it is reached
+    max_new_accounts_per_day: int = 50              # MAX_NEW_ACCOUNTS_PER_DAY: registrations accepted per UTC day
 
     def secrets(self) -> Tuple[str, ...]:
         return tuple(v for v in (self.gemini_api_key, self.anthropic_api_key, self.search_api_key, self.github_token, self.google_client_secret, self.google_refresh_token) if v)
@@ -81,6 +85,12 @@ class Settings:
         raw_upload = (env.get("MAX_UPLOAD_BYTES") or "").strip() or "10000000"
         if not raw_upload.isdigit() or not 1000 <= int(raw_upload) <= 20_000_000:
             raise ConfigError("MAX_UPLOAD_BYTES must be a whole number from 1000 to 20000000")
+        ceilings = {}
+        for name, default in (("MAX_MESSAGES_PER_HOUR", "30"), ("MAX_USER_TOKENS_PER_DAY", "300000"), ("MAX_GLOBAL_TOKENS_PER_DAY", "3000000"), ("MAX_NEW_ACCOUNTS_PER_DAY", "50")):
+            raw = (env.get(name) or "").strip() or default
+            if not raw.isdigit():
+                raise ConfigError(f"{name} must be a whole number (0 for no limit)")
+            ceilings[name] = int(raw)
         repos = _list(env.get("GITHUB_REPO_ALLOWLIST"))
         for repo in repos:
             if repo.count("/") != 1 or not all(repo.split("/")):
@@ -111,4 +121,8 @@ class Settings:
             cookie_secure=_flag(env.get("COOKIE_SECURE")),
             shared_private_tools=_flag(env.get("SHARED_PRIVATE_TOOLS")),
             max_upload_bytes=int(raw_upload),
+            max_messages_per_hour=ceilings["MAX_MESSAGES_PER_HOUR"],
+            max_user_tokens_per_day=ceilings["MAX_USER_TOKENS_PER_DAY"],
+            max_global_tokens_per_day=ceilings["MAX_GLOBAL_TOKENS_PER_DAY"],
+            max_new_accounts_per_day=ceilings["MAX_NEW_ACCOUNTS_PER_DAY"],
         )

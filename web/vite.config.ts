@@ -5,7 +5,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   plugins: [react()],
   server: {
-    proxy: Object.fromEntries(["/sessions", "/healthz", "/auth", "/conversations", "/memory"].map((path) => [path, "http://127.0.0.1:8000"])),
+    proxy: Object.fromEntries(["/sessions", "/healthz", "/auth", "/conversations", "/attachments"].map((path) => [path, "http://127.0.0.1:8000"])),
   },
   test: { environment: "node" },
 });

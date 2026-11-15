@@ -1,0 +1,13 @@
+# Caddy in front of Jaynes on the public VM: https with automatic certificates, Jaynes on 127.0.0.1:8000. Replace the address with the real one.
+jaynes.cyberiad.ai {
+	encode zstd gzip
+	request_body {
+		max_size 12MB
+	}
+	reverse_proxy 127.0.0.1:8000 {
+		flush_interval -1          # server-sent events: send each event as it is written
+		transport http {
+			response_header_timeout 0
+		}
+	}
+}
