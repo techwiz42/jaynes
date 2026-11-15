@@ -135,7 +135,8 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
             app.state.max_tool_calls = settings.max_tool_calls_per_turn
             app.state.max_revisions = settings.max_revisions
             app.state.tools = registry.names
-            app.state.actor = app.state.actor or GeminiActor(settings.gemini_api_key, settings.actor_model, registry=registry)
+            app.state.actor = app.state.actor or GeminiActor(settings.gemini_api_key, settings.actor_model, registry=registry,
+                                                                  vertex_project=settings.vertex_project, vertex_location=settings.vertex_location)
             app.state.observer = app.state.observer or HaikuObserver(settings.anthropic_api_key, settings.observer_model, settings.observer_timeout_seconds)
         yield
         for session in sessions.values():

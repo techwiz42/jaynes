@@ -50,9 +50,12 @@ def is_transient(error: Exception) -> bool:
 
 
 class GeminiActor:
-    def __init__(self, api_key: str, model: str, retry_delays: tuple = RETRY_DELAYS, registry: Any = None) -> None:
+    def __init__(self, api_key: str, model: str, retry_delays: tuple = RETRY_DELAYS, registry: Any = None, vertex_project: str = "", vertex_location: str = "global") -> None:
         from google import genai          # imported here so the tests need no network and no key
-        self._client = genai.Client(api_key=api_key)
+        if vertex_project:                # Vertex AI: the machine's own credentials (on GCP, its service account), billed to that project; no key
+            self._client = genai.Client(vertexai=True, project=vertex_project, location=vertex_location)
+        else:
+            self._client = genai.Client(api_key=api_key)
         self._model = model
         self._retry_delays = retry_delays
         self._registry = registry

@@ -13,7 +13,7 @@ Jaynes was built to be reached through an SSH tunnel. Serving it on the internet
 
 ## What the ceilings do not do
 
-They limit money, not content. A stranger can still ask Jaynes anything; the observer and the tool restrictions are the guardrails. Gmail, Drive, GitHub and `retrieve_docs` stay off (`SHARED_PRIVATE_TOOLS` unset), `python_sandbox` and `web_fetch` keep their own limits, and attaching a file turns web search and fetch off for the rest of that conversation. On Gemini's free tier Google may train on prompts: turn on paid billing before inviting the public.
+They limit money, not content. A stranger can still ask Jaynes anything; the observer and the tool restrictions are the guardrails. Gmail, Drive, GitHub and `retrieve_docs` stay off (`SHARED_PRIVATE_TOOLS` unset), `python_sandbox` and `web_fetch` keep their own limits, and attaching a file turns web search and fetch off for the rest of that conversation. On Gemini's free tier Google may train on prompts. Set `USE_VERTEX=1` (the actor then calls Vertex AI as the VM's service account, billed to the project, under Google Cloud's paid terms) or put the API key's project on paid billing before inviting the public.
 
 ## Where it runs
 

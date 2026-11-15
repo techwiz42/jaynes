@@ -54,6 +54,9 @@ class Settings:
     max_user_tokens_per_day: int = 300_000          # MAX_USER_TOKENS_PER_DAY: estimated, per user, per UTC day
     max_global_tokens_per_day: int = 3_000_000      # MAX_GLOBAL_TOKENS_PER_DAY: estimated, everybody together; Jaynes rests until midnight UTC when it is reached
     max_new_accounts_per_day: int = 50              # MAX_NEW_ACCOUNTS_PER_DAY: registrations accepted per UTC day
+    use_vertex: bool = False                        # USE_VERTEX=1: the actor calls Gemini through Vertex AI in a Google Cloud project, as the machine's own service account (no API key)
+    vertex_project: str = ""                        # VERTEX_PROJECT (or GOOGLE_CLOUD_PROJECT): the project that is billed, where the service account has the Vertex AI User role
+    vertex_location: str = "global"                 # VERTEX_LOCATION: "global" or a region that serves the model
 
     def secrets(self) -> Tuple[str, ...]:
         return tuple(v for v in (self.gemini_api_key, self.anthropic_api_key, self.search_api_key, self.github_token, self.google_client_secret, self.google_refresh_token) if v)
@@ -69,8 +72,14 @@ class Settings:
         env = os.environ if environ is None else environ
         gemini = (env.get("GEMINI_API_KEY") or env.get("GOOGLE_API_KEY") or "").strip()
         anthropic = (env.get("ANTHROPIC_API_KEY") or "").strip()
+        use_vertex = _flag(env.get("USE_VERTEX"))
+        vertex_project = (env.get("VERTEX_PROJECT") or env.get("GOOGLE_CLOUD_PROJECT") or "").strip()
         missing = []
-        if not gemini:
+        if use_vertex:
+            gemini = ""                                       # no key: the machine's own credentials are used
+            if not vertex_project:
+                missing.append("VERTEX_PROJECT (USE_VERTEX is on)")
+        elif not gemini:
             missing.append("GEMINI_API_KEY (or GOOGLE_API_KEY)")
         if not anthropic:
             missing.append("ANTHROPIC_API_KEY")
@@ -125,4 +134,7 @@ class Settings:
             max_user_tokens_per_day=ceilings["MAX_USER_TOKENS_PER_DAY"],
             max_global_tokens_per_day=ceilings["MAX_GLOBAL_TOKENS_PER_DAY"],
             max_new_accounts_per_day=ceilings["MAX_NEW_ACCOUNTS_PER_DAY"],
+            use_vertex=use_vertex,
+            vertex_project=vertex_project if use_vertex else "",
+            vertex_location=(env.get("VERTEX_LOCATION") or "global").strip(),
         )

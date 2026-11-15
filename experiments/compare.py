@@ -8,7 +8,7 @@ Each case is run in two modes, and the results are read three ways:
   self-critique     one Gemini call told to draft, critique and revise privately; only the <final> answer is kept
   two-agent         the actor's draft, the observer's review, and at most one correction (the final answer is the correction when the draft was retracted)
 
-Needs GEMINI_API_KEY and ANTHROPIC_API_KEY. Results (every raw answer too) are written to experiments/results/, which git ignores.
+Needs GEMINI_API_KEY (or USE_VERTEX=1 with VERTEX_PROJECT and Google credentials) and ANTHROPIC_API_KEY. Results (every raw answer too) are written to experiments/results/, which git ignores.
 """
 from __future__ import annotations
 
@@ -193,10 +193,11 @@ async def main_async(args: argparse.Namespace) -> None:
             for attempt in range(2):
                 meter = Meter()
                 if mode == "two_agent":
-                    actor = MeteredActor(settings.gemini_api_key, settings.actor_model, meter, limiter=limiter)
+                    actor = MeteredActor(settings.gemini_api_key, settings.actor_model, meter, limiter=limiter, vertex_project=settings.vertex_project, vertex_location=settings.vertex_location)
                     observer = HaikuObserver(settings.anthropic_api_key, settings.observer_model, settings.observer_timeout_seconds, client=MeteredClient(anthropic, meter))
                 else:
-                    actor = MeteredActor(settings.gemini_api_key, settings.actor_model, meter, system_override=SELF_CRITIQUE_SYSTEM, limiter=limiter)
+                    actor = MeteredActor(settings.gemini_api_key, settings.actor_model, meter, system_override=SELF_CRITIQUE_SYSTEM, limiter=limiter,
+                                         vertex_project=settings.vertex_project, vertex_location=settings.vertex_location)
                     observer = NullObserver()
                 run = await run_case(case, mode, rep, Session(f"{case.id}-{mode}-{rep}", actor, observer), meter)
                 if not run.actor_error or attempt == 1:
