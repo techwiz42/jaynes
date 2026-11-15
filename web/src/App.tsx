@@ -312,7 +312,7 @@ function Chat({
       <header>
         <h1 className="brand">
           <BrainIcon size={26} />
-          jaynes
+          Jaynes - a bicameral chatbot
         </h1>
         <span className={`status ${connected ? "on" : "off"}`}>{!sessionId ? "starting…" : connected ? "connected" : "reconnecting…"}</span>
         {isStreaming(state) && <span className="status on">replying…</span>}

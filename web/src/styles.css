@@ -30,7 +30,7 @@
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, sans-serif; }
 .app { display: flex; flex-direction: column; height: 100dvh; max-width: 1200px; margin: 0 auto; padding: 0 16px; }
-header { display: flex; align-items: baseline; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
 h1 { margin: 0; font-size: 1.2rem; }
 h2 { margin: 0 0 8px; font-size: 1rem; }
 .status { font-size: 0.85rem; color: var(--muted); }
@@ -148,6 +148,7 @@ header .spacer { flex: 1; }
   .sidebar ul { flex-direction: row; }
   .sidebar li { min-width: 140px; }
   .message { max-width: 95%; }
+  header .brand { flex: 1 1 100%; font-size: 1.05rem; }          /* the title takes its own row, so the longer headline is never squeezed */
 }
 .site-footer { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 16px; padding: 10px 0 12px; border-top: 1px solid var(--border); font-size: 0.8rem; color: var(--muted); }
 .site-footer a { color: inherit; }

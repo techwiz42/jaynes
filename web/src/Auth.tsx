@@ -27,7 +27,7 @@ export function AuthForm({ onAuthenticated }: { onAuthenticated: (account: Accou
     <div className="auth">
       <h1 className="brand">
         <BrainIcon size={34} />
-        jaynes
+        Jaynes - a bicameral chatbot
       </h1>
       <form onSubmit={(event) => void submit(event)} aria-label={mode === "login" ? "Log in" : "Create an account"}>
         <label>
