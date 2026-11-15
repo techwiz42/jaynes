@@ -27,7 +27,7 @@ from urllib.parse import urlsplit
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from . import auth
 from .actor import Actor
@@ -57,8 +57,27 @@ class WebFiles(StaticFiles):
         return response
 
 
+MAX_ATTACHMENTS = 5
+MAX_ATTACHMENT_CHARS = 100_000                    # of one file's text that goes to the model; the rest is cut off and the user is told
+MAX_ATTACHED_CHARS = 250_000                      # of all the files of one message together
+
+
+class AttachmentIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    text: str = Field(min_length=1, max_length=MAX_ATTACHMENT_CHARS)
+
+
 class MessageIn(BaseModel):
-    text: str = Field(min_length=1, max_length=8000)
+    text: str = Field(default="", max_length=8000)
+    attachments: List[AttachmentIn] = Field(default_factory=list, max_length=MAX_ATTACHMENTS)
+
+    @model_validator(mode="after")
+    def something_to_send(self) -> "MessageIn":
+        if not self.text.strip() and not self.attachments:
+            raise ValueError("write a message or attach a file")
+        if sum(len(a.text) for a in self.attachments) > MAX_ATTACHED_CHARS:
+            raise ValueError(f"the files together are too long: at most {MAX_ATTACHED_CHARS:,} characters")
+        return self
 
 
 class Credentials(BaseModel):
@@ -84,7 +103,7 @@ def sse_frame(event: Event) -> str:
 
 
 def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = None, store: Optional[Store] = None, cookie_secure: bool = False,
-               max_upload_bytes: int = 2_000_000) -> FastAPI:
+               max_upload_bytes: int = 10_000_000) -> FastAPI:
     """Without an actor and observer given, the real ones are built from the environment when the server starts (and it refuses to start without its keys)."""
     sessions: Dict[str, Session] = {}
     by_conversation: Dict[str, str] = {}                    # conversation id -> the live session continuing it
@@ -250,7 +269,7 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
     @app.post("/sessions/{session_id}/messages", status_code=202, dependencies=[Depends(same_origin)])
     async def send(session_id: str, message: MessageIn, user: Dict[str, str] = Depends(current_user)) -> Dict[str, bool]:
         session = find(session_id, user)
-        task = asyncio.get_running_loop().create_task(session.handle_user_message(message.text))
+        task = asyncio.get_running_loop().create_task(session.handle_user_message(message.text.strip(), [(a.name, a.text) for a in message.attachments]))
         tasks.add(task)
         task.add_done_callback(tasks.discard)
         return {"accepted": True}
@@ -298,8 +317,7 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
     async def list_documents(user: Dict[str, str] = Depends(current_user)) -> List[Dict[str, object]]:
         return await app.state.store.run(app.state.store.list_memory, user["id"], "document")
 
-    @app.post("/memory/documents", status_code=201, dependencies=[Depends(same_origin)])
-    async def add_document(request: Request, name: str = Query(default="", max_length=200), user: Dict[str, str] = Depends(current_user)) -> Dict[str, str]:
+    async def read_upload(request: Request) -> bytes:
         declared = request.headers.get("content-length")
         if declared and declared.isdigit() and int(declared) > app.state.max_upload_bytes:
             raise HTTPException(status_code=413, detail=f"too large: at most {app.state.max_upload_bytes:,} bytes")
@@ -308,12 +326,27 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
             data.extend(chunk)
             if len(data) > app.state.max_upload_bytes:
                 raise HTTPException(status_code=413, detail=f"too large: at most {app.state.max_upload_bytes:,} bytes")
+        return bytes(data)
+
+    @app.post("/memory/documents", status_code=201, dependencies=[Depends(same_origin)])
+    async def add_document(request: Request, name: str = Query(default="", max_length=200), user: Dict[str, str] = Depends(current_user)) -> Dict[str, str]:
+        data = await read_upload(request)
         try:
-            title, text = await asyncio.to_thread(extract_text, name, bytes(data))
+            title, text = await asyncio.to_thread(extract_text, name, data)
             document_id = await app.state.store.run(app.state.store.add_memory, user["id"], "document", title, text)
         except (DocumentError, StoreError) as error:
             raise HTTPException(status_code=422, detail=str(error))
         return {"id": document_id, "title": title}
+
+    @app.post("/attachments", dependencies=[Depends(same_origin)])
+    async def read_attachment(request: Request, name: str = Query(default="", max_length=200), user: Dict[str, str] = Depends(current_user)) -> Dict[str, object]:
+        """The text of a file to be sent with a message. Nothing is stored: the page keeps the text until the message is sent."""
+        data = await read_upload(request)
+        try:
+            title, text = await asyncio.to_thread(extract_text, name, data)
+        except DocumentError as error:
+            raise HTTPException(status_code=422, detail=str(error))
+        return {"name": title, "text": text[:MAX_ATTACHMENT_CHARS], "chars": len(text), "truncated": len(text) > MAX_ATTACHMENT_CHARS}
 
     @app.delete("/memory/documents/{document_id}", dependencies=[Depends(same_origin)])
     async def delete_document(document_id: str, user: Dict[str, str] = Depends(current_user)) -> Dict[str, bool]:

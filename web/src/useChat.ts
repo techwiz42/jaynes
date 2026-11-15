@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { ApiError, conversationMessages, connectEvents, createSession, sendMessage } from "./api";
+import { ApiError, conversationMessages, connectEvents, createSession, sendMessage, type Attachment } from "./api";
 import { initialState, reduceAction } from "./reducer";
 
 /**
@@ -57,11 +57,11 @@ export function useChat(conversationId: string | null, onLoggedOut: () => void, 
   }, [replying, onActivity]);
 
   const send = useCallback(
-    async (text: string) => {
+    async (text: string, attachments: Attachment[] = []) => {
       if (!sessionId) return;
       setProblem(null);
       try {
-        await sendMessage(sessionId, text);
+        await sendMessage(sessionId, text, attachments);
         onActivity();
       } catch (error) {
         failed(error);

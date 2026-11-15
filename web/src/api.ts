@@ -66,9 +66,25 @@ export async function createSession(conversationId?: string): Promise<StartedSes
   return { sessionId: body.session_id, conversationId: body.conversation_id, live: Boolean(body.live) };
 }
 
-export async function sendMessage(sessionId: string, text: string): Promise<void> {
-  await request(`/sessions/${sessionId}/messages`, json("POST", { text }), "the message was not accepted");
+/** A file sent with a message: its name and the text read from it. */
+export interface Attachment {
+  name: string;
+  text: string;
 }
+
+export async function sendMessage(sessionId: string, text: string, attachments: Attachment[] = []): Promise<void> {
+  await request(`/sessions/${sessionId}/messages`, json("POST", { text, attachments: attachments.map(({ name, text: body }) => ({ name, text: body })) }), "the message was not accepted");
+}
+
+export interface ReadAttachment extends Attachment {
+  chars: number;
+  /** The file had more text than is sent; the rest was cut off. */
+  truncated: boolean;
+}
+
+/** The server reads the file (PDF, Word, Excel or text) and returns its text. Nothing is stored until the message is sent. */
+export const readAttachment = (file: File): Promise<ReadAttachment> =>
+  request(`/attachments?name=${encodeURIComponent(file.name)}`, { method: "POST", body: file, headers: { "content-type": "application/octet-stream" } }, "could not read the file");
 
 export interface ConversationSummary {
   id: string;

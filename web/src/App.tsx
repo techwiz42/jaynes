@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { ApiError, currentUser, deleteConversation, listConversations, logout, type Account, type ConversationSummary } from "./api";
+import { ApiError, currentUser, deleteConversation, listConversations, logout, readAttachment, type Account, type Attachment, type ConversationSummary } from "./api";
 import { AuthForm } from "./Auth";
 import { BrainIcon } from "./BrainIcon";
 import { Footer } from "./Footer";
@@ -141,13 +141,78 @@ function Typing() {
   );
 }
 
-function Composer({ onSend, disabled, working }: { onSend: (text: string) => Promise<void>; disabled: boolean; working: boolean }) {
+const MAX_FILES = 5;
+
+interface PendingFile {
+  key: number;
+  name: string;
+  status: "reading" | "ready" | "failed";
+  text: string;
+  note: string;
+}
+
+function Composer({ onSend, disabled, working }: { onSend: (text: string, attachments: Attachment[]) => Promise<void>; disabled: boolean; working: boolean }) {
   const [text, setText] = useState("");
+  const [files, setFiles] = useState<PendingFile[]>([]);
+  const [dragging, setDragging] = useState(false);
+  const picker = useRef<HTMLInputElement>(null);
+  const nextKey = useRef(0);
+  const reading = files.some((file) => file.status === "reading");
+  const ready = files.filter((file) => file.status === "ready");
+
+  const update = (key: number, change: Partial<PendingFile>): void => setFiles((all) => all.map((file) => (file.key === key ? { ...file, ...change } : file)));
+  const attach = (chosen: File[]): void => {
+    const room = Math.max(0, MAX_FILES - files.length);
+    const taken = chosen.slice(0, room);
+    const added: PendingFile[] = taken.map((file) => ({ key: nextKey.current++, name: file.name, status: "reading", text: "", note: "" }));
+    const skipped = chosen.length - taken.length;
+    setFiles((all) => [...all, ...added, ...(skipped > 0 ? [{ key: nextKey.current++, name: `${skipped} more file${skipped > 1 ? "s" : ""}`, status: "failed" as const, text: "", note: `at most ${MAX_FILES} files in one message` }] : [])]);
+    taken.forEach((file, index) => {
+      const key = added[index]?.key ?? -1;
+      readAttachment(file).then(
+        (read) => update(key, { status: "ready", text: read.text, note: read.truncated ? `only the first ${read.text.length.toLocaleString()} of ${read.chars.toLocaleString()} characters are sent` : "" }),
+        (error: unknown) => update(key, { status: "failed", note: (error as Error).message }),
+      );
+    });
+  };
+
+  // Files dropped anywhere on the page are attached (the browser would otherwise open the file in place of the page).
+  const attachRef = useRef(attach);
+  attachRef.current = attach;
+  useEffect(() => {
+    const carriesFiles = (event: DragEvent): boolean => Array.from(event.dataTransfer?.types ?? []).includes("Files");
+    const over = (event: DragEvent): void => {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      setDragging(true);
+    };
+    const leave = (event: DragEvent): void => {
+      if (event.relatedTarget === null) setDragging(false);
+    };
+    const drop = (event: DragEvent): void => {
+      if (!carriesFiles(event)) return;
+      event.preventDefault();
+      setDragging(false);
+      if (!disabled) attachRef.current(Array.from(event.dataTransfer?.files ?? []));
+    };
+    window.addEventListener("dragover", over);
+    window.addEventListener("dragleave", leave);
+    window.addEventListener("drop", drop);
+    return () => {
+      window.removeEventListener("dragover", over);
+      window.removeEventListener("dragleave", leave);
+      window.removeEventListener("drop", drop);
+    };
+  }, [disabled]);
+
+  const canSend = !disabled && !reading && (text.trim() !== "" || ready.length > 0);
   const send = (): void => {
+    if (!canSend) return;
+    const attachments = ready.map((file) => ({ name: file.name, text: file.text }));
     const trimmed = text.trim();
-    if (!trimmed) return;
     setText("");
-    void onSend(trimmed);
+    setFiles([]);
+    void onSend(trimmed, attachments);
   };
   const submit = (event: FormEvent): void => {
     event.preventDefault();
@@ -161,23 +226,53 @@ function Composer({ onSend, disabled, working }: { onSend: (text: string) => Pro
     }
   };
   return (
-    <form className="composer" onSubmit={submit}>
-      <div className="field">
-      <textarea
-        className={working ? "working" : undefined}
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        onKeyDown={onKeyDown}
-        placeholder="Message (Enter to send, Shift+Enter for a new line)"
-        aria-label="Message"
-        rows={3}
-        maxLength={8000}
-        disabled={disabled}
-        autoFocus
-      />
-        {working && <Typing />}
+    <form className={dragging ? "composer dragging" : "composer"} onSubmit={submit}>
+      <div className="stack">
+        {files.length > 0 && (
+          <ul className="attachments" aria-label="Attached files">
+            {files.map((file) => (
+              <li key={file.key} className={file.status}>
+                <span className="file-name">{file.name}</span>
+                <span className="file-note">{file.status === "reading" ? "reading…" : file.note}</span>
+                <button type="button" aria-label={`Remove ${file.name}`} onClick={() => setFiles((all) => all.filter((other) => other.key !== file.key))}>
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {ready.length > 0 && <p className="attach-hint">With a file attached, web search and fetch are off for the rest of this conversation.</p>}
+        <div className="field">
+          <textarea
+            className={working ? "working" : undefined}
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder={dragging ? "Drop files to attach them" : "Message (Enter to send, Shift+Enter for a new line). Drop or attach PDF, Word, Excel and text files."}
+            aria-label="Message"
+            rows={3}
+            maxLength={8000}
+            disabled={disabled}
+            autoFocus
+          />
+          {working && <Typing />}
+        </div>
       </div>
-      <button type="submit" disabled={disabled || !text.trim()}>
+      <input
+        ref={picker}
+        type="file"
+        multiple
+        hidden
+        aria-label="Attach files"
+        onChange={(event) => {
+          attach(Array.from(event.target.files ?? []));
+          event.target.value = "";
+        }}
+      />
+      <button type="button" className="attach" disabled={disabled || files.length >= MAX_FILES} onClick={() => picker.current?.click()} title="Attach files" aria-label="Choose files to attach">
+        📎
+      </button>
+      <button type="submit" disabled={!canSend}>
         Send
       </button>
     </form>
