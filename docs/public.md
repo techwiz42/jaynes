@@ -15,7 +15,13 @@ Jaynes was built to be reached through an SSH tunnel. Serving it on the internet
 
 They limit money, not content. A stranger can still ask Jaynes anything; the observer and the tool restrictions are the guardrails. Gmail, Drive, GitHub and `retrieve_docs` stay off (`SHARED_PRIVATE_TOOLS` unset), `python_sandbox` and `web_fetch` keep their own limits, and attaching a file turns web search and fetch off for the rest of that conversation. On Gemini's free tier Google may train on prompts: turn on paid billing before inviting the public.
 
-## Running it
+## Where it runs
+
+`jaynes.cyberiad.ai` is `jaynes-vm` on GCP (an `e2-micro` in `us-west1-b`), defined in the `cyberiad-infra` repository (`envs/jaynes`). Caddy gets the certificate and faces the internet; Jaynes listens on `127.0.0.1:8000` under `systemd` as the `jaynes` user, which may write only to `/var/lib/jaynes` (the database and the tool-call audit log). Its settings come from Secret Manager (`jaynes-env`, written by `cyberiad-infra/scripts/add-jaynes-secrets.sh`) into tmpfs at each start. The database is backed up nightly at 03:30 UTC to the private bucket `cyberiad-demo-gcp-jaynes-backups` (kept 30 days). `python_sandbox` is off there: it needs macOS's `sandbox-exec`.
+
+Deploy with `scripts/update-jaynes-gcp.sh [sha]` (builds `web/` here, installs over IAP, restarts; `--status`, `--restart`, `--force`). The old `scripts/update-jaynes.sh` still targets melville.
+
+## Running it elsewhere
 
 1. Jaynes on `127.0.0.1:8000` as today, with `BEHIND_PROXY=1` and `COOKIE_SECURE=1` in its environment file (`deploy/run.sh` adds the proxy flags).
 2. Caddy with `deploy/Caddyfile` for the certificate and the https front. Ports 80 and 443 open; SSH only through the cloud provider's tunnel.

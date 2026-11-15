@@ -62,6 +62,7 @@ From a clone of this repository on the laptop:
 
 ```
 scripts/set-jaynes-keys.sh                 # prompts for the two API keys (typed without echo) and stores them on melville, readable only by its owner
+scripts/update-jaynes-gcp.sh               # deploys origin/main to jaynes-vm on GCP (see docs/public.md); update-jaynes.sh does the same for melville
 scripts/update-jaynes.sh                   # deploys origin/main: melville clones the commit, web/ is built here and uploaded, the service restarts
 scripts/update-jaynes.sh <sha>             # deploy or roll back to a pushed commit
 scripts/update-jaynes.sh --restart         # restart only
