@@ -37,14 +37,6 @@ async def build_registry(settings: Settings, store=None) -> Tuple[ToolRegistry, 
         notes.append(f"python_sandbox is off: {problem}")
 
     private_ok = settings.allow_private_egress
-    if store is not None:
-        if private_ok:
-            from .memory import MemorySave, MemorySearch
-            tools.append(MemorySearch(store))
-            tools.append(MemorySave(store))
-        else:
-            notes.append("memory_search and memory_save are off: ALLOW_PRIVATE_EGRESS is not 1 (what a user stored would go to the model providers; see the README)")
-
     # Gmail, Drive, GitHub and DOCS_DIR use one set of credentials for everyone who can log in. With user accounts they stay off unless the operator says that is intended.
     shared_ok = settings.shared_private_tools
     if not shared_ok:

@@ -3,7 +3,7 @@ import stat
 
 import pytest
 
-from bicameral.store import SCHEMA_VERSION, Store, StoreError, chunk_text, fts_query
+from bicameral.store import SCHEMA_VERSION, Store, StoreError
 
 
 @pytest.fixture
@@ -68,90 +68,37 @@ def test_a_user_cannot_read_write_or_delete_another_users_conversation(store):
     assert len(store.conversation_messages(a, conversation)) == 1
 
 
-def test_memory_search_finds_what_the_user_said_and_ranks_the_better_match_first(store):
-    a, _ = two_users(store)
-    store.add_memory(a, "note", "Dentist", "The dentist appointment is on Tuesday at nine.")
-    store.add_memory(a, "note", "Groceries", "Buy milk and eggs.")
-    hits = store.search_memory(a, "when is the dentist appointment")
-    assert hits and hits[0]["title"] == "Dentist" and "Tuesday" in hits[0]["text"]
-    assert all("milk" not in h["text"] for h in hits[:1])
-
-
-def test_memory_search_never_returns_another_users_memory(store):
-    a, b = two_users(store)
-    store.add_memory(a, "note", "Secret", "The vault code is 4417.")
-    store.add_memory(b, "note", "Mine", "My cat is called Pixel.")
-    assert store.search_memory(b, "vault code") == []
-    assert store.search_memory(a, "vault code")[0]["title"] == "Secret"
-    conversation = store.create_conversation(a)
-    store.add_message(a, conversation, "user", "remember the vault code is 4417")
-    assert store.search_memory(b, "vault code 4417") == []
-
-
-def test_conversations_are_searchable_and_the_current_one_can_be_left_out(store):
-    a, _ = two_users(store)
-    first, second = store.create_conversation(a), store.create_conversation(a)
-    store.add_message(a, first, "user", "I am planning a trip to Lisbon in May")
-    store.add_message(a, second, "user", "Lisbon hotels please")
-    assert {h["source_ref"] for h in store.search_memory(a, "Lisbon")} == {first, second}
-    assert {h["source_ref"] for h in store.search_memory(a, "Lisbon", exclude_conversation=second)} == {first}
-
-
-def test_deleting_removes_it_from_search_too(store):
-    a, _ = two_users(store)
-    note = store.add_memory(a, "note", "Pin", "The locker combination is 12-34-56.")
-    assert store.search_memory(a, "locker combination")
-    assert store.delete_memory(a, "note", note) is True
-    assert store.search_memory(a, "locker combination") == []
-    conversation = store.create_conversation(a)
-    store.add_message(a, conversation, "user", "my locker number is 88")
-    assert store.search_memory(a, "locker")
-    store.delete_conversation(a, conversation)
-    assert store.search_memory(a, "locker") == []
-
-
-def test_a_user_cannot_delete_another_users_note_or_document(store):
-    a, b = two_users(store)
-    note = store.add_memory(a, "note", "n", "text of the note")
-    assert store.delete_memory(b, "note", note) is False
-    assert store.delete_memory(a, "document", note) is False          # right id, wrong kind
-    assert store.list_memory(a, "note")[0]["id"] == note
-
-
 def test_deleting_an_account_removes_everything_it_owned_and_nothing_else(store):
     a, b = two_users(store)
     conversation = store.create_conversation(a)
     store.add_message(a, conversation, "user", "alpha marker")
-    store.add_memory(a, "note", "n", "alpha note")
-    store.add_memory(b, "note", "n", "alpha note of b")
+    other = store.create_conversation(b)
+    store.add_message(b, other, "user", "beta marker")
     store.create_login(a, "tok", 3600)
     store.delete_user(a)
     assert store.user_by_email("a@example.com") is None and store.user_for_login("tok") is None
-    assert store.search_memory(a, "alpha") == []
-    assert [h["text"] for h in store.search_memory(b, "alpha")] == ["alpha note of b"]
+    assert store.conversation_messages(a, conversation) is None
+    assert [m["text"] for m in store.conversation_messages(b, other)] == ["beta marker"]
 
 
-def test_search_text_cannot_inject_fts_syntax(store):
-    a, _ = two_users(store)
-    store.add_memory(a, "note", "n", "plain words here")
-    for query in ('" OR 1=1 --', "title:secret*", "NEAR(a b)", "(((", "*", "AND OR NOT", ""):
-        store.search_memory(a, query)                                    # must not raise
-    assert fts_query('x" OR "y') == '"x" OR "or" OR "y"'
-
-
-def test_long_text_is_cut_into_pieces_at_natural_places_and_nothing_is_lost():
-    text = ("Sentence number one is here. " * 200).strip()
-    pieces = chunk_text(text, 500)
-    assert len(pieces) > 5 and all(len(p) <= 500 for p in pieces)
-    assert " ".join(" ".join(pieces).split()) == " ".join(text.split())
-    assert chunk_text("short") == ["short"] and chunk_text("   ") == []
-
-
-def test_too_much_text_or_nothing_is_refused(store):
-    a, _ = two_users(store)
-    with pytest.raises(StoreError):
-        store.add_memory(a, "note", "n", "x" * 200_001)
-    with pytest.raises(StoreError):
-        store.add_memory(a, "note", "n", "   ")
-    with pytest.raises(StoreError):
-        store.add_memory(a, "conversation", "n", "text")
+def test_a_version_1_database_loses_its_memory_tables_and_keeps_everything_else(tmp_path):
+    import sqlite3
+    path = tmp_path / "jaynes.db"
+    store = Store(str(path))
+    user = store.create_user("a@example.com", "h")
+    conversation = store.create_conversation(user)
+    store.add_message(user, conversation, "user", "hello")
+    with sqlite3.connect(path) as db:                                    # what version 1 had besides
+        db.executescript("""
+            DROP TABLE usage;
+            CREATE TABLE memory (id INTEGER PRIMARY KEY, user_id TEXT NOT NULL, kind TEXT, source_ref TEXT, title TEXT, text TEXT, created_at REAL);
+            CREATE VIRTUAL TABLE memory_fts USING fts5(text, title, content='memory', content_rowid='id');
+            CREATE TRIGGER memory_ai AFTER INSERT ON memory BEGIN INSERT INTO memory_fts(rowid, text, title) VALUES (new.id, new.text, new.title); END;
+            INSERT INTO memory (user_id, kind, source_ref, title, text, created_at) VALUES ('u', 'note', 'r', 't', 'secret', 0);
+            PRAGMA user_version = 1;""")
+    reopened = Store(str(path))
+    with sqlite3.connect(path) as db:
+        tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master")}
+        assert not any(name.startswith("memory") for name in tables)
+        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    assert [m["text"] for m in reopened.conversation_messages(user, conversation)] == ["hello"]

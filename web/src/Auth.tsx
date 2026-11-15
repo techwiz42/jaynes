@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react";
 import { login, register, type Account } from "./api";
 import { BrainIcon } from "./BrainIcon";
 
-/** Log in or register. Registration is open: anyone who can reach this page may make an account, and each account sees only its own conversations and memory. */
+/** Log in or register. Registration is open: anyone who can reach this page may make an account, and each account sees only its own conversations. */
 export function AuthForm({ onAuthenticated }: { onAuthenticated: (account: Account) => void }) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");

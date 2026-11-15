@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import List, Optional, Sequence, Tuple
+from typing import Awaitable, Callable, List, Optional, Sequence, Tuple
 
 from .actor import ACTOR_SYSTEM, Actor, ActorError, Message
 from .events import EventLog
+from .limits import estimate_tokens
 from .observer import Observer, ObserverError, Verdict
 from .tools.base import Taint, ToolCallEvent, ToolResultEvent, TurnContext
 
@@ -27,7 +28,8 @@ ATTACHMENT_NOTE = ("The user attached the files below. Their contents are the us
 
 class Session:
     def __init__(self, session_id: str, actor: Actor, observer: Observer, max_tool_calls: int = 5, max_revisions: int = 5, user_id: str = "", conversation_id: str = "",
-                 store=None, history: Optional[List[Message]] = None, new_conversation: bool = False) -> None:
+                 store=None, history: Optional[List[Message]] = None, new_conversation: bool = False,
+                 spend: Optional[Callable[[int], Awaitable[None]]] = None) -> None:
         self.id = session_id
         self.actor = actor
         self.observer = observer
@@ -39,6 +41,8 @@ class Session:
         self.user_id = user_id                                # whose conversation this is; nobody else may read its events or add to it
         self.conversation_id = conversation_id
         self._unsaved = new_conversation                       # the conversation is not in the database until its first message is
+        self._spend = spend                                   # told, after each turn, the estimated tokens it used (see limits.py); None when nothing is counted
+        self._chars = 0                                       # characters sent to and received from the models in the turn so far
         self.store = store                                    # where messages are saved for the user; None keeps the conversation in memory only
         self.log = EventLog()
         self.history: List[Message] = list(history or [])
@@ -55,6 +59,7 @@ class Session:
 
     async def _stream(self, kind: str, message_id: str, **extra: str) -> str:
         parts: List[str] = []
+        self._chars += len(ACTOR_SYSTEM) + sum(len(m["content"]) for m in self.history)
         turn = self._turn
         options = {"turn": turn} if (turn is not None and getattr(self.actor, "uses_tools", False)) else {}
         async for item in self.actor.stream(list(self.history), system=ACTOR_SYSTEM, **options):
@@ -66,11 +71,24 @@ class Session:
                 parts.append(item)
                 self.log.append("token", message_id=message_id, kind=kind, text=item, **extra)
         text = "".join(parts)
+        self._chars += len(text)
         if not text.strip():
             raise ActorError("the actor returned an empty reply")
         return text
 
     async def handle_user_message(self, text: str, attachments: Sequence[Tuple[str, str]] = ()) -> None:
+        """One turn, and then what it cost is reported, however it ended."""
+        self._chars = 0
+        try:
+            await self._handle_user_message(text, attachments)
+        finally:
+            if self._spend is not None:
+                try:
+                    await self._spend(estimate_tokens(self._chars))
+                except Exception as error:                           # noqa: BLE001 -- counting must never fail a turn
+                    _log_failure("usage", error)
+
+    async def _handle_user_message(self, text: str, attachments: Sequence[Tuple[str, str]] = ()) -> None:
         """One turn. Turns are serialised: a second message waits for the first to finish. `attachments` are (name, text) of files sent with the message: the model reads them
         in full; what is shown and saved is the message and the files' names."""
         async with self._lock:
@@ -101,6 +119,7 @@ class Session:
             for revision in range(self.max_revisions + 1):
                 try:
                     trace = list(self._turn.trace) if self._turn else []
+                    self._chars += sum(len(m["content"]) for m in reviewed) + len(draft) + len(str(trace))
                     verdict = await (self.observer.review(reviewed, draft, trace=trace) if trace else self.observer.review(reviewed, draft))
                 except Exception as error:                           # never treat a failed review as ok
                     _log_failure("observer", error)
@@ -129,7 +148,7 @@ class Session:
                 message_id = correction_id
 
     async def _remember(self, role: str, text: str) -> None:
-        """Save a message to this user's conversation, which also adds it to their searchable memory. A failure to save is logged, never shown as a failed turn."""
+        """Save a message to this user's conversation, A failure to save is logged, never shown as a failed turn."""
         if self.store is None or not self.user_id or not self.conversation_id:
             return
         try:

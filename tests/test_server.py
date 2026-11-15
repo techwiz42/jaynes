@@ -90,4 +90,4 @@ async def test_healthz_counts_sessions_and_turns():
     async with http:
         await join(http)
         await http.post("/sessions")
-        assert (await http.get("/healthz")).json() == {"ok": True, "sessions": 1, "turns_in_progress": 0, "tools": [], "tools_off": []}
+        assert (await http.get("/healthz")).json() == {"ok": True, "sessions": 1, "turns_in_progress": 0, "tools": [], "tools_off": [], "usage_today": {"tokens": 0, "messages": 0, "users": 0}}

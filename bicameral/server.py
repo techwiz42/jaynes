@@ -1,4 +1,4 @@
-"""HTTP routes. Users register and log in; everything else needs the login cookie, and a user sees only their own sessions, conversations and memory. The service is still meant
+"""HTTP routes. Users register and log in; everything else needs the login cookie, and a user sees only their own sessions and conversations. The service is still meant
 to be reached through a tunnel to localhost.
 
   POST /auth/register {email, password} -> 201 {"email"}; logs in      POST /auth/login {email, password} -> {"email"}
@@ -6,11 +6,10 @@ to be reached through a tunnel to localhost.
   POST /auth/delete-account {password}  removes the account and all its data
   POST /sessions {conversation_id?}     -> {"session_id", "conversation_id", "live"}  (a new conversation, saved with its first message, or an earlier one of this user's continued;
                                            "live" is true when that conversation already had a running session, whose events then replay all of it)
-  POST /sessions/{id}/messages {"text"} -> 202; the turn runs in the background
+  POST /sessions/{id}/messages {"text", "attachments"?} -> 202; the turn runs in the background
   GET  /sessions/{id}/events            server-sent events; ?after=<id> (or Last-Event-ID) resumes after that event
   GET  /conversations                   this user's conversations      GET /conversations/{id}/messages     DELETE /conversations/{id}
-  GET/POST /memory/documents (POST body = the file's bytes, ?name=)     DELETE /memory/documents/{id}
-  GET/POST /memory/notes {title, text}                                  DELETE /memory/notes/{id}
+  POST /attachments (body = the file's bytes, ?name=) -> {"name", "text", "chars", "truncated"}: the text of a file to send with a message; nothing is stored
   GET  /healthz                         {"ok": true, "sessions": n, "turns_in_progress": n, "tools": [...], "tools_off": [why each other tool is off]}
 """
 from __future__ import annotations
@@ -18,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -34,6 +34,7 @@ from .actor import Actor
 from .config import Settings
 from .documents import DocumentError, extract_text
 from .events import Event
+from .limits import Limits, seconds_until_utc_midnight, utc_day
 from .observer import Observer
 from .orchestrator import Session
 from .store import Store, StoreError
@@ -93,17 +94,23 @@ class NewSession(BaseModel):
     conversation_id: Optional[str] = Field(default=None, max_length=64)
 
 
-class NoteIn(BaseModel):
-    title: str = Field(default="", max_length=80)
-    text: str = Field(min_length=1, max_length=4000)
-
-
 def sse_frame(event: Event) -> str:
     return f"id: {event.id}\nevent: {event.type}\ndata: {json.dumps(event.flat())}\n\n"
 
 
+SECURITY_HEADERS = {
+    "Content-Security-Policy": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; connect-src 'self'; base-uri 'none'; "
+                               "form-action 'self'; frame-ancestors 'none'; object-src 'none'",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=()",
+}
+MAX_BODY_SLACK_BYTES = 1_000_000         # beyond the largest file, what a request may carry (a message with its attachments' text, a login)
+
+
 def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = None, store: Optional[Store] = None, cookie_secure: bool = False,
-               max_upload_bytes: int = 10_000_000) -> FastAPI:
+               max_upload_bytes: int = 10_000_000, limits: Optional[Limits] = None) -> FastAPI:
     """Without an actor and observer given, the real ones are built from the environment when the server starts (and it refuses to start without its keys)."""
     sessions: Dict[str, Session] = {}
     by_conversation: Dict[str, str] = {}                    # conversation id -> the live session continuing it
@@ -122,6 +129,7 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
             app.state.store = app.state.store or Store(str(Path(settings.data_dir) / "jaynes.db"))
             app.state.cookie_secure = settings.cookie_secure
             app.state.max_upload_bytes = settings.max_upload_bytes
+            app.state.limits = Limits(settings.max_messages_per_hour, settings.max_user_tokens_per_day, settings.max_global_tokens_per_day, settings.max_new_accounts_per_day)
             registry, notes = await build_registry(settings, app.state.store)
             app.state.tool_notes = notes
             app.state.max_tool_calls = settings.max_tool_calls_per_turn
@@ -139,11 +147,26 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
     app.state.store = store
     app.state.cookie_secure = cookie_secure
     app.state.max_upload_bytes = max_upload_bytes
+    app.state.limits = limits                                # None: nothing is limited (tests, and a private install that sets every ceiling to 0 gets Limits of zeros)
     app.state.tools = []
     app.state.tool_notes = []
     app.state.max_tool_calls = 5
     app.state.max_revisions = 5
     app.state.sessions = sessions
+
+    @app.middleware("http")
+    async def protect(request: Request, call_next):
+        """A request body beyond the largest file plus some slack is refused before it is read; every answer carries the security headers (and HSTS when served over https)."""
+        declared = request.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > app.state.max_upload_bytes + MAX_BODY_SLACK_BYTES:
+            response: Response = Response(status_code=413, content='{"detail":"request too large"}', media_type="application/json")
+        else:
+            response = await call_next(request)
+        for name, value in SECURITY_HEADERS.items():
+            response.headers.setdefault(name, value)
+        if app.state.cookie_secure:
+            response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+        return response
 
     # ---- guards ------------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -164,6 +187,27 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
     def address(request: Request) -> str:
         return request.client.host if request.client else "unknown"
 
+    hourly = auth.Throttle(limit=1, window_seconds=3600)      # replaced when the ceilings are known (below); one event per message, per user
+
+    def ceilings() -> Optional[Limits]:
+        return app.state.limits
+
+    async def check_budget(user: Dict[str, str]) -> None:
+        """Refuse a message the user, or Jaynes as a whole, may not afford today; the answer says which ceiling and when it lifts."""
+        limit = ceilings()
+        if limit is None:
+            return
+        if limit.messages_per_hour:
+            hourly.limit = limit.messages_per_hour
+            if hourly.blocked(user["id"]):
+                wait = hourly.retry_after(user["id"])
+                raise HTTPException(status_code=429, detail=f"you are sending messages too fast; try again in {max(1, wait // 60)} minute(s)", headers={"Retry-After": str(wait)})
+        day, db = utc_day(), app.state.store
+        if limit.user_tokens_per_day and await db.run(db.user_tokens, user["id"], day) >= limit.user_tokens_per_day:
+            raise HTTPException(status_code=429, detail="you have used today's allowance; it renews at midnight UTC", headers={"Retry-After": str(seconds_until_utc_midnight())})
+        if limit.global_tokens_per_day and (await db.run(db.day_totals, day))["tokens"] >= limit.global_tokens_per_day:
+            raise HTTPException(status_code=503, detail="Jaynes has reached its limit for today and is resting until midnight UTC", headers={"Retry-After": str(seconds_until_utc_midnight())})
+
     def start_login(response: Response, user_id: str, token: str) -> None:
         response.set_cookie(COOKIE, token, max_age=int(auth.LOGIN_LIFETIME_SECONDS), httponly=True, samesite="strict", secure=app.state.cookie_secure, path="/")
 
@@ -179,6 +223,9 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
             auth.check_password(body.password)
         except auth.AuthError as error:
             raise HTTPException(status_code=422, detail=str(error))
+        limit = ceilings()
+        if limit and limit.new_accounts_per_day and await app.state.store.run(app.state.store.accounts_created_since, time.time() - time.time() % 86400) >= limit.new_accounts_per_day:
+            raise HTTPException(status_code=503, detail="new accounts are closed for today; try again after midnight UTC", headers={"Retry-After": str(seconds_until_utc_midnight())})
         password_hash = await asyncio.to_thread(auth.hash_password, body.password)
         try:
             user_id = await app.state.store.run(app.state.store.create_user, email, password_hash)
@@ -261,14 +308,21 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
         else:
             conversation_id = uuid.uuid4().hex                       # saved when its first message is, so opening the page leaves nothing behind
         session_id = uuid.uuid4().hex
+
+        async def spend(tokens: int, user_id: str = user["id"]) -> None:
+            await db.run(db.add_usage, user_id, utc_day(), tokens, 1)
+
         sessions[session_id] = Session(session_id, app.state.actor, app.state.observer, app.state.max_tool_calls, app.state.max_revisions,
-                                       user_id=user["id"], conversation_id=conversation_id, store=db, history=history, new_conversation=not body or not body.conversation_id)
+                                       user_id=user["id"], conversation_id=conversation_id, store=db, history=history, new_conversation=not body or not body.conversation_id, spend=spend)
         by_conversation[conversation_id] = session_id
         return {"session_id": session_id, "conversation_id": conversation_id, "live": False}
 
     @app.post("/sessions/{session_id}/messages", status_code=202, dependencies=[Depends(same_origin)])
     async def send(session_id: str, message: MessageIn, user: Dict[str, str] = Depends(current_user)) -> Dict[str, bool]:
         session = find(session_id, user)
+        await check_budget(user)
+        if ceilings() and ceilings().messages_per_hour:
+            hourly.add(user["id"])
         task = asyncio.get_running_loop().create_task(session.handle_user_message(message.text.strip(), [(a.name, a.text) for a in message.attachments]))
         tasks.add(task)
         task.add_done_callback(tasks.discard)
@@ -311,11 +365,7 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
             raise HTTPException(status_code=404, detail="no such conversation")
         return {"ok": True}
 
-    # ---- memory: documents and notes ----------------------------------------------------------------------------------------------------------------------------
-
-    @app.get("/memory/documents")
-    async def list_documents(user: Dict[str, str] = Depends(current_user)) -> List[Dict[str, object]]:
-        return await app.state.store.run(app.state.store.list_memory, user["id"], "document")
+    # ---- files sent with a message -----------------------------------------------------------------------------------------------------------------------------
 
     async def read_upload(request: Request) -> bytes:
         declared = request.headers.get("content-length")
@@ -328,16 +378,6 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
                 raise HTTPException(status_code=413, detail=f"too large: at most {app.state.max_upload_bytes:,} bytes")
         return bytes(data)
 
-    @app.post("/memory/documents", status_code=201, dependencies=[Depends(same_origin)])
-    async def add_document(request: Request, name: str = Query(default="", max_length=200), user: Dict[str, str] = Depends(current_user)) -> Dict[str, str]:
-        data = await read_upload(request)
-        try:
-            title, text = await asyncio.to_thread(extract_text, name, data)
-            document_id = await app.state.store.run(app.state.store.add_memory, user["id"], "document", title, text)
-        except (DocumentError, StoreError) as error:
-            raise HTTPException(status_code=422, detail=str(error))
-        return {"id": document_id, "title": title}
-
     @app.post("/attachments", dependencies=[Depends(same_origin)])
     async def read_attachment(request: Request, name: str = Query(default="", max_length=200), user: Dict[str, str] = Depends(current_user)) -> Dict[str, object]:
         """The text of a file to be sent with a message. Nothing is stored: the page keeps the text until the message is sent."""
@@ -348,33 +388,16 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
             raise HTTPException(status_code=422, detail=str(error))
         return {"name": title, "text": text[:MAX_ATTACHMENT_CHARS], "chars": len(text), "truncated": len(text) > MAX_ATTACHMENT_CHARS}
 
-    @app.delete("/memory/documents/{document_id}", dependencies=[Depends(same_origin)])
-    async def delete_document(document_id: str, user: Dict[str, str] = Depends(current_user)) -> Dict[str, bool]:
-        if not await app.state.store.run(app.state.store.delete_memory, user["id"], "document", document_id):
-            raise HTTPException(status_code=404, detail="no such document")
-        return {"ok": True}
-
-    @app.get("/memory/notes")
-    async def list_notes(user: Dict[str, str] = Depends(current_user)) -> List[Dict[str, object]]:
-        return await app.state.store.run(app.state.store.list_memory, user["id"], "note")
-
-    @app.post("/memory/notes", status_code=201, dependencies=[Depends(same_origin)])
-    async def add_note(body: NoteIn, user: Dict[str, str] = Depends(current_user)) -> Dict[str, str]:
-        try:
-            note_id = await app.state.store.run(app.state.store.add_memory, user["id"], "note", body.title or body.text, body.text)
-        except StoreError as error:
-            raise HTTPException(status_code=422, detail=str(error))
-        return {"id": note_id}
-
-    @app.delete("/memory/notes/{note_id}", dependencies=[Depends(same_origin)])
-    async def delete_note(note_id: str, user: Dict[str, str] = Depends(current_user)) -> Dict[str, bool]:
-        if not await app.state.store.run(app.state.store.delete_memory, user["id"], "note", note_id):
-            raise HTTPException(status_code=404, detail="no such note")
-        return {"ok": True}
-
     @app.get("/healthz")
-    async def healthz() -> Dict[str, object]:
-        return {"ok": True, "sessions": len(sessions), "turns_in_progress": sum(1 for s in sessions.values() if s.busy), "tools": app.state.tools, "tools_off": app.state.tool_notes}
+    async def healthz(request: Request) -> Dict[str, object]:
+        """Anyone may ask whether the service is up. The detail (tools, spending) is for the operator, on the machine itself: a request that came through the proxy gets only the first part."""
+        brief: Dict[str, object] = {"ok": True}
+        if request.headers.get("x-forwarded-for"):
+            return brief
+        db = app.state.store
+        usage = await db.run(db.day_totals, utc_day()) if db is not None else {}
+        return {**brief, "sessions": len(sessions), "turns_in_progress": sum(1 for s in sessions.values() if s.busy), "tools": app.state.tools, "tools_off": app.state.tool_notes,
+                "usage_today": usage}
 
     if WEB_DIST.is_dir():                         # the built frontend, when there is one
         app.mount("/", WebFiles(directory=WEB_DIST, html=True), name="web")

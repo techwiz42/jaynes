@@ -1,7 +1,7 @@
-"""The database: users, their login sessions, their saved conversations, and their private memory. SQLite, one file, mode 600.
+"""The database: users, their login sessions and their saved conversations. SQLite, one file, mode 600.
 
 Every read and write of a user's data takes that user's id and filters on it in the SQL itself, so there is no call that returns another user's rows. Calls are plain
-blocking functions; the server runs them in a thread (`Store.run`). Memory search is SQLite's FTS5 with BM25 ranking: nothing is sent to another service.
+blocking functions; the server runs them in a thread (`Store.run`).
 """
 from __future__ import annotations
 
@@ -15,9 +15,7 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
-SCHEMA_VERSION = 1
-CHUNK_CHARS = 1200                      # a long text is stored as pieces about this long, split at paragraph or sentence ends
-MAX_MEMORY_CHARS = 200_000              # per document or note
+SCHEMA_VERSION = 3
 TITLE_CHARS = 80
 
 SCHEMA = """
@@ -32,45 +30,29 @@ CREATE TABLE messages (
   id INTEGER PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE, user_id TEXT NOT NULL,
   role TEXT NOT NULL CHECK (role IN ('user', 'assistant')), text TEXT NOT NULL, created_at REAL NOT NULL);
 CREATE INDEX messages_conversation ON messages(conversation_id, id);
-CREATE TABLE memory (
-  id INTEGER PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL CHECK (kind IN ('conversation', 'document', 'note')),
-  source_ref TEXT NOT NULL,            -- the conversation id, the document id or the note id this piece came from
-  title TEXT NOT NULL, text TEXT NOT NULL, created_at REAL NOT NULL);
-CREATE INDEX memory_user_source ON memory(user_id, kind, source_ref);
-CREATE VIRTUAL TABLE memory_fts USING fts5(text, title, content='memory', content_rowid='id', tokenize='porter unicode61');
-CREATE TRIGGER memory_ai AFTER INSERT ON memory BEGIN
-  INSERT INTO memory_fts(rowid, text, title) VALUES (new.id, new.text, new.title); END;
-CREATE TRIGGER memory_ad AFTER DELETE ON memory BEGIN
-  INSERT INTO memory_fts(memory_fts, rowid, text, title) VALUES ('delete', old.id, old.text, old.title); END;
+CREATE TABLE usage (
+  day TEXT NOT NULL, user_id TEXT NOT NULL, tokens INTEGER NOT NULL DEFAULT 0, messages INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, user_id));
 """
+
+# Version 1 also had a private "memory" (an index of conversations, uploaded documents and notes, searched by two tools). That feature is gone; its data goes with it.
+MIGRATE_1_TO_2 = """
+DROP TRIGGER IF EXISTS memory_ai;
+DROP TRIGGER IF EXISTS memory_ad;
+DROP TABLE IF EXISTS memory_fts;
+DROP TABLE IF EXISTS memory;
+"""
+
+# Version 3 counts what each user spends per day (see limits.py).
+MIGRATE_2_TO_3 = """
+CREATE TABLE usage (
+  day TEXT NOT NULL, user_id TEXT NOT NULL, tokens INTEGER NOT NULL DEFAULT 0, messages INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, user_id));
+"""
+
+DELETED_USER = "-"                      # what is left of a deleted user's spending: the day's total must not shrink, but nothing says whose it was
 
 
 class StoreError(Exception):
     """A request the store refuses (a duplicate email, text that is too long). The message is safe to show the user."""
-
-
-def chunk_text(text: str, size: int = CHUNK_CHARS) -> List[str]:
-    """Pieces of about `size` characters, cut at a blank line, a line end or a sentence end where there is one."""
-    text = text.strip()
-    if len(text) <= size:
-        return [text] if text else []
-    pieces: List[str] = []
-    while len(text) > size:
-        window = text[:size]
-        cut = max(window.rfind("\n\n"), window.rfind("\n"), window.rfind(". "), window.rfind("? "), window.rfind("! "))
-        cut = cut + 1 if cut > size // 3 else size
-        pieces.append(text[:cut].strip())
-        text = text[cut:].strip()
-    if text:
-        pieces.append(text)
-    return [p for p in pieces if p]
-
-
-def fts_query(query: str) -> str:
-    """User words as a safe FTS5 query: each word quoted (so no operator or column filter in the text means anything), any of them may match."""
-    words = re.findall(r"\w+", query.lower())[:24]
-    return " OR ".join(f'"{w}"' for w in words)
 
 
 class Store:
@@ -86,6 +68,11 @@ class Store:
             version = db.execute("PRAGMA user_version").fetchone()[0]
             if version == 0:
                 db.executescript(SCHEMA)
+                db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            elif version in (1, 2):
+                if version == 1:
+                    db.executescript(MIGRATE_1_TO_2)
+                db.executescript(MIGRATE_2_TO_3)
                 db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             elif version != SCHEMA_VERSION:
                 raise StoreError(f"the database has schema version {version}; this program expects {SCHEMA_VERSION}")
@@ -141,9 +128,12 @@ class Store:
             db.execute("DELETE FROM auth_sessions WHERE token_hash = ?", (token_hash,))
 
     def delete_user(self, user_id: str) -> None:
-        """The account and everything of its own: logins, conversations, messages and memory."""
+        """The account and everything of its own: logins, conversations and messages."""
         with self._connect() as db:
-            db.execute("DELETE FROM memory WHERE user_id = ?", (user_id,))          # the delete trigger keeps the search index in step
+            for day, tokens, messages in db.execute("SELECT day, tokens, messages FROM usage WHERE user_id = ?", (user_id,)).fetchall():
+                db.execute("INSERT INTO usage (day, user_id, tokens, messages) VALUES (?, ?, ?, ?) ON CONFLICT(day, user_id) DO UPDATE SET tokens = tokens + excluded.tokens, "
+                           "messages = messages + excluded.messages", (day, DELETED_USER, tokens, messages))
+            db.execute("DELETE FROM usage WHERE user_id = ?", (user_id,))
             db.execute("DELETE FROM users WHERE id = ?", (user_id,))
 
     # ---- conversations ------------------------------------------------------------------------------------------------------------------------------------------
@@ -168,7 +158,7 @@ class Store:
         return [dict(r) for r in rows]
 
     def add_message(self, user_id: str, conversation_id: str, role: str, text: str, create: bool = False) -> bool:
-        """Save a message and index it in the user's memory. False when the conversation is not this user's. With `create`, a conversation that does not exist yet is made
+        """Save a message. False when the conversation is not this user's. With `create`, a conversation that does not exist yet is made
         for this user first (a new chat is saved when its first message is, not when the page opens); one that exists under another user is still refused."""
         now = time.time()
         with self._connect() as db:
@@ -184,59 +174,29 @@ class Store:
             if row["n"] == 0 and role == "user":
                 title = " ".join(text.split())[:TITLE_CHARS] or title
             db.execute("UPDATE conversations SET updated_at = ?, title = ? WHERE id = ?", (now, title, conversation_id))
-            for piece in chunk_text(text):
-                db.execute("INSERT INTO memory (user_id, kind, source_ref, title, text, created_at) VALUES (?, 'conversation', ?, ?, ?, ?)",
-                           (user_id, conversation_id, f"{'You' if role == 'user' else 'Jaynes'} in “{title}”", piece, now))
         return True
 
     def delete_conversation(self, user_id: str, conversation_id: str) -> bool:
         with self._connect() as db:
-            db.execute("DELETE FROM memory WHERE user_id = ? AND kind = 'conversation' AND source_ref = ?", (user_id, conversation_id))
             return db.execute("DELETE FROM conversations WHERE id = ? AND user_id = ?", (conversation_id, user_id)).rowcount > 0
 
-    # ---- memory: documents and notes (conversations are added by add_message) -------------------------------------------------------------------------------------
+    # ---- spending (see limits.py) ---------------------------------------------------------------------------------------------------------------------------------
 
-    def add_memory(self, user_id: str, kind: str, title: str, text: str) -> str:
-        """Store a document or a note, chunked and searchable. Returns its id."""
-        if kind not in ("document", "note"):
-            raise StoreError("only documents and notes are added this way")
-        text = text.strip()
-        if not text:
-            raise StoreError("there is no text to store")
-        if len(text) > MAX_MEMORY_CHARS:
-            raise StoreError(f"too long: at most {MAX_MEMORY_CHARS:,} characters")
-        source_ref, now = uuid.uuid4().hex, time.time()
-        title = " ".join(title.split())[:TITLE_CHARS] or ("Untitled note" if kind == "note" else "Untitled document")
+    def add_usage(self, user_id: str, day: str, tokens: int, messages: int = 1) -> None:
         with self._connect() as db:
-            for piece in chunk_text(text):
-                db.execute("INSERT INTO memory (user_id, kind, source_ref, title, text, created_at) VALUES (?, ?, ?, ?, ?, ?)", (user_id, kind, source_ref, title, piece, now))
-        return source_ref
+            db.execute("INSERT INTO usage (day, user_id, tokens, messages) VALUES (?, ?, ?, ?) ON CONFLICT(day, user_id) DO UPDATE SET tokens = tokens + excluded.tokens, "
+                       "messages = messages + excluded.messages", (day, user_id, max(0, int(tokens)), messages))
 
-    def list_memory(self, user_id: str, kind: str) -> List[Dict[str, Any]]:
+    def user_tokens(self, user_id: str, day: str) -> int:
         with self._connect() as db:
-            rows = db.execute("SELECT source_ref AS id, title, MIN(created_at) AS created_at, COUNT(*) AS pieces, SUM(LENGTH(text)) AS chars FROM memory "
-                              "WHERE user_id = ? AND kind = ? GROUP BY source_ref, title ORDER BY created_at DESC", (user_id, kind)).fetchall()
-        return [dict(r) for r in rows]
+            row = db.execute("SELECT tokens FROM usage WHERE day = ? AND user_id = ?", (day, user_id)).fetchone()
+        return int(row[0]) if row else 0
 
-    def delete_memory(self, user_id: str, kind: str, source_ref: str) -> bool:
+    def day_totals(self, day: str) -> Dict[str, int]:
         with self._connect() as db:
-            return db.execute("DELETE FROM memory WHERE user_id = ? AND kind = ? AND source_ref = ?", (user_id, kind, source_ref)).rowcount > 0
+            tokens, messages, users = db.execute("SELECT COALESCE(SUM(tokens), 0), COALESCE(SUM(messages), 0), COUNT(DISTINCT user_id) FROM usage WHERE day = ?", (day,)).fetchone()
+        return {"tokens": int(tokens), "messages": int(messages), "users": int(users)}
 
-    def search_memory(self, user_id: str, query: str, limit: int = 5, kinds: Tuple[str, ...] = ("conversation", "document", "note"),
-                      exclude_conversation: Optional[str] = None) -> List[Dict[str, Any]]:
-        """The best matches for `query` among this user's memory, best first. Never anyone else's."""
-        match = fts_query(query)
-        if not match:
-            return []
-        marks = ",".join("?" for _ in kinds)
-        sql = (f"SELECT m.kind, m.source_ref, m.title, m.text, m.created_at FROM memory_fts f JOIN memory m ON m.id = f.rowid "
-               f"WHERE memory_fts MATCH ? AND m.user_id = ? AND m.kind IN ({marks})")
-        params: List[Any] = [match, user_id, *kinds]
-        if exclude_conversation:
-            sql += " AND NOT (m.kind = 'conversation' AND m.source_ref = ?)"
-            params.append(exclude_conversation)
-        sql += " ORDER BY bm25(memory_fts, 1.0, 2.0) LIMIT ?"
-        params.append(max(1, min(limit, 20)))
+    def accounts_created_since(self, since: float) -> int:
         with self._connect() as db:
-            rows = db.execute(sql, params).fetchall()
-        return [dict(r) for r in rows]
+            return int(db.execute("SELECT COUNT(*) FROM users WHERE created_at >= ?", (since,)).fetchone()[0])

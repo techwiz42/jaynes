@@ -69,7 +69,6 @@ async def test_the_attachments_endpoint_returns_the_text_and_stores_nothing():
         assert response.status_code == 200
         body = response.json()
         assert body["name"] == "budget.xlsx" and "chairs\t400" in body["text"] and body["truncated"] is False
-        assert (await http.get("/memory/documents")).json() == []
         assert (await http.post("/attachments", params={"name": "x.doc"}, content=b"x")).status_code == 422
     async with browser(app) as stranger:
         assert (await stranger.post("/attachments", params={"name": "a.txt"}, content=b"hi")).status_code == 401

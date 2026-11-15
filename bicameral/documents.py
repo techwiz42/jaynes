@@ -1,4 +1,4 @@
-"""Turning an uploaded file into text, for the user's memory and for a message: text of every kind as it is, PDFs through pypdf, Word (.docx) and Excel (.xlsx) files."""
+"""Turning an uploaded file into text, for a message: text of every kind as it is, PDFs through pypdf, Word (.docx) and Excel (.xlsx) files."""
 from __future__ import annotations
 
 import io

@@ -70,7 +70,7 @@ async def test_nothing_works_without_a_login():
         assert (await http.get("/auth/me")).status_code == 401
         assert (await http.post("/sessions")).status_code == 401
         assert (await http.get("/conversations")).status_code == 401
-        assert (await http.get("/memory/documents")).status_code == 401
+        assert (await http.post("/attachments", params={"name": "a.txt"}, content=b"hi")).status_code == 401
         assert (await http.get("/sessions/x/events")).status_code == 401
         assert (await http.get("/healthz")).status_code == 200                      # the one open route, and it names no user
         http.cookies.set("jaynes_session", "not-a-real-token")
@@ -127,7 +127,7 @@ async def test_a_page_on_another_origin_cannot_act_for_the_user():
         evil = {"origin": "http://localhost:9999"}
         assert (await http.post("/sessions", headers=evil)).status_code == 403
         assert (await http.post("/auth/logout", headers=evil)).status_code == 403
-        assert (await http.post("/memory/notes", json={"text": "x"}, headers=evil)).status_code == 403
+        assert (await http.post("/attachments", params={"name": "a.txt"}, content=b"hi", headers=evil)).status_code == 403
         assert (await http.post("/sessions", headers={"origin": "http://test"})).status_code == 200
 
 
@@ -135,7 +135,7 @@ async def test_deleting_the_account_removes_the_data_and_needs_the_password():
     app, store = make()
     async with browser(app) as http:
         await join(http, "a@example.com")
-        await http.post("/memory/notes", json={"text": "the vault code is 4417"})
+        await chat(app, http, "the vault code is 4417")
         assert (await http.post("/auth/delete-account", json={"password": "wrong wrong wrong"})).status_code == 401
         assert (await http.post("/auth/delete-account", json={"password": PASSWORD})).status_code == 200
         assert (await http.get("/auth/me")).status_code == 401
@@ -144,17 +144,13 @@ async def test_deleting_the_account_removes_the_data_and_needs_the_password():
 
 # ---- one user cannot reach another's anything -------------------------------------------------------------------------------------------------------------
 
-async def test_users_cannot_see_or_use_each_others_sessions_conversations_or_memory():
+async def test_users_cannot_see_or_use_each_others_sessions_or_conversations():
     app, _ = make()
     async with browser(app) as alice, browser(app) as bob:
         await join(alice, "alice@example.com")
         await join(bob, "bob@example.com")
         session_id = await chat(app, alice, "my private plan")
         conversation_id = (await alice.get("/conversations")).json()[0]["id"]
-        await alice.post("/memory/notes", json={"title": "n", "text": "alice note"})
-        note_id = (await alice.get("/memory/notes")).json()[0]["id"]
-        upload = await alice.post("/memory/documents", params={"name": "plan.txt"}, content=b"alice document")
-        document_id = upload.json()["id"]
 
         assert (await bob.get(f"/sessions/{session_id}/events")).status_code == 404
         assert (await bob.post(f"/sessions/{session_id}/messages", json={"text": "hi"})).status_code == 404
@@ -162,12 +158,8 @@ async def test_users_cannot_see_or_use_each_others_sessions_conversations_or_mem
         assert (await bob.get(f"/conversations/{conversation_id}/messages")).status_code == 404
         assert (await bob.delete(f"/conversations/{conversation_id}")).status_code == 404
         assert (await bob.post("/sessions", json={"conversation_id": conversation_id})).status_code == 404
-        assert (await bob.get("/memory/notes")).json() == [] and (await bob.get("/memory/documents")).json() == []
-        assert (await bob.delete(f"/memory/notes/{note_id}")).status_code == 404
-        assert (await bob.delete(f"/memory/documents/{document_id}")).status_code == 404
 
         assert len((await alice.get(f"/conversations/{conversation_id}/messages")).json()) == 2        # and it was all untouched
-        assert len((await alice.get("/memory/notes")).json()) == 1 and len((await alice.get("/memory/documents")).json()) == 1
 
 
 # ---- conversations are kept ----------------------------------------------------------------------------------------------------------------------------------
@@ -204,47 +196,31 @@ async def test_a_reply_the_observer_did_not_approve_is_not_kept():
     assert texts == ["when?", "right"]
 
 
-async def test_deleting_a_conversation_removes_it_and_its_searchable_memory():
+async def test_deleting_a_conversation_removes_it():
     app, store = make()
     async with browser(app) as http:
         await join(http, "a@example.com")
         await chat(app, http, "lighthouse keeper")
-        user_id = store.user_by_email("a@example.com")["id"]
         conversation_id = (await http.get("/conversations")).json()[0]["id"]
-        assert store.search_memory(user_id, "lighthouse")
         assert (await http.delete(f"/conversations/{conversation_id}")).status_code == 200
-        assert (await http.get("/conversations")).json() == [] and store.search_memory(user_id, "lighthouse") == []
+        assert (await http.get("/conversations")).json() == []
 
 
-# ---- documents and notes -------------------------------------------------------------------------------------------------------------------------------------
+# ---- files sent with a message -------------------------------------------------------------------------------------------------------------------------------------
 
-async def test_uploading_listing_and_deleting_a_document():
-    app, store = make()
-    async with browser(app) as http:
-        await join(http, "a@example.com")
-        response = await http.post("/memory/documents", params={"name": "trip.md"}, content=b"# Trip\nWe leave for Oslo on Friday.")
-        assert response.status_code == 201 and response.json()["title"] == "trip.md"
-        listed = (await http.get("/memory/documents")).json()
-        assert len(listed) == 1 and listed[0]["title"] == "trip.md"
-        user_id = store.user_by_email("a@example.com")["id"]
-        assert store.search_memory(user_id, "Oslo Friday")[0]["kind"] == "document"
-        assert (await http.delete(f"/memory/documents/{listed[0]['id']}")).status_code == 200
-        assert store.search_memory(user_id, "Oslo") == []
-
-
-async def test_bad_uploads_are_refused_with_a_reason():
+async def test_bad_files_are_refused_with_a_reason():
     app, _ = make(max_upload_bytes=1000)
     async with browser(app) as http:
         await join(http, "a@example.com")
-        assert (await http.post("/memory/documents", params={"name": "big.txt"}, content=b"x" * 1001)).status_code == 413
-        assert (await http.post("/memory/documents", params={"name": "pic.png"}, content=b"\x89PNG....")).status_code == 422
-        assert (await http.post("/memory/documents", params={"name": "bin.txt"}, content=b"ab\x00cd")).status_code == 422
-        assert (await http.post("/memory/documents", params={"name": "empty.txt"}, content=b"   ")).status_code == 422
-        broken = await http.post("/memory/documents", params={"name": "x.pdf"}, content=b"%PDF-1.4 this is not really a pdf")
+        assert (await http.post("/attachments", params={"name": "big.txt"}, content=b"x" * 1001)).status_code == 413
+        assert (await http.post("/attachments", params={"name": "pic.png"}, content=b"\x89PNG....")).status_code == 422
+        assert (await http.post("/attachments", params={"name": "bin.txt"}, content=b"ab\x00cd")).status_code == 422
+        assert (await http.post("/attachments", params={"name": "empty.txt"}, content=b"   ")).status_code == 422
+        broken = await http.post("/attachments", params={"name": "x.pdf"}, content=b"%PDF-1.4 this is not really a pdf")
         assert broken.status_code == 422 and "PDF" in broken.json()["detail"]
 
 
-async def test_a_real_pdf_is_read():
+async def test_a_pdf_without_text_is_said_to_be_unreadable():
     pypdf = pytest.importorskip("pypdf")
     from io import BytesIO
     writer = pypdf.PdfWriter()
@@ -254,20 +230,8 @@ async def test_a_real_pdf_is_read():
     app, _ = make()
     async with browser(app) as http:
         await join(http, "a@example.com")
-        response = await http.post("/memory/documents", params={"name": "blank.pdf"}, content=buffer.getvalue())
-        assert response.status_code == 422 and "no text" in response.json()["detail"]                   # a page without text is said to be unreadable, not stored empty
-
-
-async def test_notes_can_be_added_listed_and_deleted():
-    app, _ = make()
-    async with browser(app) as http:
-        await join(http, "a@example.com")
-        created = await http.post("/memory/notes", json={"title": "Wifi", "text": "The wifi password is swordfish"})
-        assert created.status_code == 201
-        notes = (await http.get("/memory/notes")).json()
-        assert notes[0]["title"] == "Wifi"
-        assert (await http.delete(f"/memory/notes/{notes[0]['id']}")).status_code == 200
-        assert (await http.get("/memory/notes")).json() == []
+        response = await http.post("/attachments", params={"name": "blank.pdf"}, content=buffer.getvalue())
+        assert response.status_code == 422 and "no text" in response.json()["detail"]
 
 
 async def test_opening_the_page_leaves_nothing_saved_until_a_message_is_sent():

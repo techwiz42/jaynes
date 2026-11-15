@@ -102,25 +102,6 @@ export const listConversations = (): Promise<ConversationSummary[]> => request("
 export const conversationMessages = (id: string): Promise<SavedMessage[]> => request(`/conversations/${id}/messages`);
 export const deleteConversation = (id: string): Promise<unknown> => request(`/conversations/${id}`, { method: "DELETE" }, "could not delete the conversation");
 
-// ---- memory: documents and notes --------------------------------------------------------------------------------------------------------------------------
-
-export interface MemoryEntry {
-  id: string;
-  title: string;
-  created_at: number;
-  pieces: number;
-  chars: number;
-}
-
-export const listDocuments = (): Promise<MemoryEntry[]> => request("/memory/documents");
-export const listNotes = (): Promise<MemoryEntry[]> => request("/memory/notes");
-export const deleteDocument = (id: string): Promise<unknown> => request(`/memory/documents/${id}`, { method: "DELETE" }, "could not delete the document");
-export const deleteNote = (id: string): Promise<unknown> => request(`/memory/notes/${id}`, { method: "DELETE" }, "could not delete the note");
-export const addNote = (title: string, text: string): Promise<unknown> => request("/memory/notes", json("POST", { title, text }), "could not save the note");
-
-export const uploadDocument = (file: File): Promise<unknown> =>
-  request(`/memory/documents?name=${encodeURIComponent(file.name)}`, { method: "POST", body: file, headers: { "content-type": "application/octet-stream" } }, "could not upload the document");
-
 // ---- the live event stream --------------------------------------------------------------------------------------------------------------------------------
 
 export interface EventConnection {
