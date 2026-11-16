@@ -6,6 +6,7 @@ import { BrainIcon } from "./BrainIcon";
 import { Footer } from "./Footer";
 import { MarkdownText, plainText } from "./Markdown";
 import { Sidebar } from "./Sidebar";
+import { downloadText, transcriptFileName, transcriptMarkdown } from "./transcript";
 import { isActorWorking, isStreaming, type AssistantItem, type ChatState, type Item, type Review, type ToolItem } from "./reducer";
 import { useChat } from "./useChat";
 
@@ -304,6 +305,7 @@ function Chat({
 }) {
   const { state, sessionId, conversationId: started, connected, problem, send } = useChat(conversationId, onLoggedOut, onActivity);
   const [accountOpen, setAccountOpen] = useState(false);
+  const title = conversations.find((conversation) => conversation.id === started)?.title ?? "Jaynes conversation";
   useEffect(() => {
     if (started) onConversation(started);
   }, [started, onConversation]);
@@ -318,6 +320,11 @@ function Chat({
         {isStreaming(state) && <span className="status on">replying…</span>}
         <span className="spacer" />
         <span className="account">{account.email}</span>
+        {state.items.some((item) => item.kind === "user") && (
+          <button type="button" className="quiet" onClick={() => downloadText(transcriptFileName(title), transcriptMarkdown(state.items, title))}>
+            Download chat
+          </button>
+        )}
         <button type="button" className="quiet" onClick={() => setAccountOpen(!accountOpen)} aria-expanded={accountOpen}>
           Account
         </button>
