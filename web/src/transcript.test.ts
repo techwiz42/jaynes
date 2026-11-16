@@ -19,6 +19,14 @@ describe("transcript", () => {
     expect(text).toBe("# Arithmetic\n\nSaved from Jaynes on 2026-11-15.\n\n**You:**\n\nWhat is 2+2?\n\n---\n\n**Jaynes:**\n\nIt is 4.\n");
   });
 
+  it("writes the model's math as dollar-sign math and leaves prices and code alone", () => {
+    const items: Item[] = [assistant("a1", "Energy is \\(E=mc^2\\), and\n\n\\[x^2+y^2=z^2\\]\n\nIt costs $5 or $6. Code: `\\(a\\)`")];
+    const text = transcriptMarkdown(items, "Math", new Date("2026-11-15T12:00:00Z"));
+    expect(text).toContain("Energy is $E=mc^2$, and");
+    expect(text).toContain("$$\nx^2+y^2=z^2\n$$");
+    expect(text).toContain("It costs \\$5 or \\$6. Code: `\\(a\\)`");
+  });
+
   it("makes a safe file name", () => {
     expect(transcriptFileName("Why is the sky blue? / ../etc")).toBe("why-is-the-sky-blue-etc.md");
     expect(transcriptFileName("???")).toBe("conversation.md");

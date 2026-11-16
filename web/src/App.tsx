@@ -321,9 +321,18 @@ function Chat({
         <span className="spacer" />
         <span className="account">{account.email}</span>
         {state.items.some((item) => item.kind === "user") && (
-          <button type="button" className="quiet" onClick={() => downloadText(transcriptFileName(title), transcriptMarkdown(state.items, title))}>
-            Download chat
-          </button>
+          <>
+            <button type="button" className="quiet" onClick={() => downloadText(transcriptFileName(title), transcriptMarkdown(state.items, title))}>
+              Download chat (.md)
+            </button>
+            <button
+              type="button"
+              className="quiet"
+              onClick={() => void import("./transcriptHtml").then(({ transcriptHtml }) => downloadText(transcriptFileName(title, "html"), transcriptHtml(state.items, title), "text/html"))}
+            >
+              Download chat (.html)
+            </button>
+          </>
         )}
         <button type="button" className="quiet" onClick={() => setAccountOpen(!accountOpen)} aria-expanded={accountOpen}>
           Account
