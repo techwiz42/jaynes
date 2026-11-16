@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, createSession, currentUser, login, readAttachment } from "./api";
+import { ApiError, connectEvents, createSession, currentUser, login, readAttachment } from "./api";
 
 function reply(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
@@ -45,5 +45,38 @@ describe("the API client", () => {
     await readAttachment(file);
     expect(fetchMock.mock.calls[0]![0]).toBe("/attachments?name=trip%20%26%20plans.md");
     expect(fetchMock.mock.calls[0]![1]?.body).toBe(file);
+  });
+});
+
+describe("the event stream", () => {
+  class FakeSource {
+    static last: FakeSource | null = null;
+    onopen: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    constructor(public url: string) {
+      FakeSource.last = this;
+    }
+    addEventListener(): void {}
+    close(): void {}
+  }
+
+  const dropped = async (aliveStatus: number) => {
+    vi.stubGlobal("EventSource", FakeSource);
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => (url === "/auth/me" ? reply(200, { id: "u", email: "a@example.com" }) : reply(aliveStatus, { detail: "x" }))));
+    const gone = vi.fn();
+    const connection = connectEvents("s1", () => 0, () => undefined, () => undefined, () => undefined, gone);
+    FakeSource.last!.onerror!();
+    await vi.waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url]) => url === "/sessions/s1/alive")).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    connection.close();
+    return gone;
+  };
+
+  it("tells the caller when the server no longer has the session, instead of retrying forever", async () => {
+    expect(await dropped(404)).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps retrying when the session is still there", async () => {
+    expect(await dropped(200)).not.toHaveBeenCalled();
   });
 });

@@ -4,9 +4,9 @@ import { initialState, reduceAction } from "./reducer";
 
 /**
  * One conversation. Without `conversationId` a new one is started; with one, that conversation is continued: its saved messages are the first events of its log, so they are shown first, then the live ones.
- * `onLoggedOut` is called when the server says the login has ended. `onActivity` when something the conversation list shows may have changed (a message was sent, a reply finished).
+ * `onLoggedOut` is called when the server says the login has ended; `onSessionGone` when it no longer has this session (it restarted). `onActivity` when something the conversation list shows may have changed (a message was sent, a reply finished).
  */
-export function useChat(conversationId: string | null, onLoggedOut: () => void, onActivity: () => void) {
+export function useChat(conversationId: string | null, onLoggedOut: () => void, onActivity: () => void, onSessionGone: () => void = () => undefined) {
   const [state, dispatch] = useReducer(reduceAction, initialState);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [thisConversation, setThisConversation] = useState<string | null>(conversationId);
@@ -41,9 +41,9 @@ export function useChat(conversationId: string | null, onLoggedOut: () => void, 
 
   useEffect(() => {
     if (!sessionId) return;
-    const connection = connectEvents(sessionId, () => lastId.current, dispatch, setConnected, onLoggedOut);
+    const connection = connectEvents(sessionId, () => lastId.current, dispatch, setConnected, onLoggedOut, onSessionGone);
     return () => connection.close();
-  }, [sessionId, onLoggedOut]);
+  }, [sessionId, onLoggedOut, onSessionGone]);
 
   const replying = state.items.some((item) => item.kind === "assistant" && !item.complete && !item.interrupted);
   const wasReplying = useRef(false);

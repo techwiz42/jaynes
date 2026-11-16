@@ -336,6 +336,12 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
         task.add_done_callback(tasks.discard)
         return {"accepted": True}
 
+    @app.get("/sessions/{session_id}/alive")
+    async def alive(session_id: str, user: Dict[str, str] = Depends(current_user)) -> Dict[str, bool]:
+        """Whether the session still exists: after a restart it does not, and the page starts the conversation again instead of waiting on it."""
+        find(session_id, user)
+        return {"alive": True}
+
     @app.get("/sessions/{session_id}/events")
     async def events(session_id: str, after: Optional[int] = Query(default=None, ge=0), last_event_id: Optional[str] = Header(default=None),
                      user: Dict[str, str] = Depends(current_user)) -> StreamingResponse:

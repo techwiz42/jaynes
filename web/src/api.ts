@@ -112,7 +112,7 @@ const RECONNECT_DELAY_MS = 1000;
 
 /**
  * Subscribe to a session's events. When the connection drops it is reopened after a moment with `?after=<last id>`, so the server replays only what was missed.
- * `lastId` says how far the caller has got; the reducer also ignores any event it has already applied.
+ * `lastId` says how far the caller has got; the reducer also ignores any event it has already applied. `onSessionGone` is called when the server no longer has the session (it restarted).
  */
 export function connectEvents(
   sessionId: string,
@@ -120,6 +120,7 @@ export function connectEvents(
   onEvent: (event: ChatEvent) => void,
   onStatus: (connected: boolean) => void,
   onLoggedOut: () => void = () => undefined,
+  onSessionGone: () => void = () => undefined,
 ): EventConnection {
   let source: EventSource | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -136,8 +137,21 @@ export function connectEvents(
       void currentUser().then(
         (user) => {
           if (closed) return;
-          if (user) timer = setTimeout(open, RECONNECT_DELAY_MS);
-          else onLoggedOut();
+          if (!user) {
+            onLoggedOut();
+            return;
+          }
+          // A restart ends every session; asking for a dead one never works, so the caller is told to start the conversation again.
+          void fetch(`/sessions/${sessionId}/alive`, { credentials: "same-origin" }).then(
+            (response) => {
+              if (closed) return;
+              if (response.status === 404) onSessionGone();
+              else timer = setTimeout(open, RECONNECT_DELAY_MS);
+            },
+            () => {
+              if (!closed) timer = setTimeout(open, RECONNECT_DELAY_MS);
+            },
+          );
         },
         () => {
           if (!closed) timer = setTimeout(open, RECONNECT_DELAY_MS);

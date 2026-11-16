@@ -305,7 +305,11 @@ function Chat({
   onActivity: () => void;
   onConversation: (id: string) => void;
 }) {
-  const { state, sessionId, conversationId: started, connected, problem, send } = useChat(conversationId, onLoggedOut, onActivity);
+  // After a restart the server has lost this chat's session. A saved conversation is opened again (it comes back with all its messages); one that was never saved has nothing to bring back.
+  const savedRef = useRef<{ started: string | null; saved: boolean }>({ started: null, saved: false });
+  const sessionGone = useCallback(() => (savedRef.current.saved && savedRef.current.started ? onOpen(savedRef.current.started) : onNew()), [onOpen, onNew]);
+  const { state, sessionId, conversationId: started, connected, problem, send } = useChat(conversationId, onLoggedOut, onActivity, sessionGone);
+  savedRef.current = { started, saved: conversations.some((conversation) => conversation.id === started) };
   const [accountOpen, setAccountOpen] = useState(false);
   const title = conversations.find((conversation) => conversation.id === started)?.title ?? "Jaynes conversation";
   useEffect(() => {

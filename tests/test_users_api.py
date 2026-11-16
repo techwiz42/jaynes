@@ -201,6 +201,18 @@ async def test_a_continued_conversation_shows_its_saved_messages_whether_or_not_
     assert shown == [("user_message", "first question"), ("draft_complete", "Hello there"), ("user_message", "second question"), ("draft_complete", "Second answer")]
 
 
+async def test_the_page_can_ask_whether_a_session_still_exists():
+    app, _ = make()
+    async with browser(app) as alice, browser(app) as bob:
+        await join(alice, "a@example.com")
+        await join(bob, "b@example.com")
+        session_id = (await alice.post("/sessions")).json()["session_id"]
+        assert (await alice.get(f"/sessions/{session_id}/alive")).json() == {"alive": True}
+        assert (await bob.get(f"/sessions/{session_id}/alive")).status_code == 404          # another user's session looks like one that does not exist
+        app.state.sessions.clear()                                                           # as after a restart
+        assert (await alice.get(f"/sessions/{session_id}/alive")).status_code == 404
+
+
 async def test_a_reply_the_observer_did_not_approve_is_not_kept():
     app, _ = make(FakeActor("wrong", "right"), FakeObserver(RETRACT, OK))
     async with browser(app) as http:
