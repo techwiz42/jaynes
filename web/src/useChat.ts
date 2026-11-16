@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { ApiError, conversationMessages, connectEvents, createSession, sendMessage, type Attachment } from "./api";
+import { ApiError, connectEvents, createSession, sendMessage, type Attachment } from "./api";
 import { initialState, reduceAction } from "./reducer";
 
 /**
- * One conversation. Without `conversationId` a new one is started; with one, that conversation is continued: its saved messages are shown first, then the live events.
+ * One conversation. Without `conversationId` a new one is started; with one, that conversation is continued: its saved messages are the first events of its log, so they are shown first, then the live ones.
  * `onLoggedOut` is called when the server says the login has ended. `onActivity` when something the conversation list shows may have changed (a message was sent, a reply finished).
  */
 export function useChat(conversationId: string | null, onLoggedOut: () => void, onActivity: () => void) {
@@ -26,11 +26,7 @@ export function useChat(conversationId: string | null, onLoggedOut: () => void, 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const started = await createSession(conversationId ?? undefined);
-      if (conversationId && !started.live) {
-        const saved = await conversationMessages(started.conversationId);
-        if (!cancelled) dispatch({ type: "history", messages: saved.map((m) => ({ role: m.role, text: m.text })) });
-      }
+      const started = await createSession(conversationId ?? undefined);       // a continued conversation's saved messages are the start of the session's event log
       if (!cancelled) {
         setThisConversation(started.conversationId);
         setSessionId(started.sessionId);

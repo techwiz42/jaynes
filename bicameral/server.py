@@ -21,7 +21,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator, Dict, List, Optional, Set
+from typing import Any, AsyncIterator, Dict, List, Optional, Set
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
@@ -298,6 +298,7 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
         db = app.state.store
         conversation_id = body.conversation_id if body else None
         history: List[Dict[str, str]] = []
+        saved: List[Dict[str, Any]] = []
         if conversation_id:
             live = by_conversation.get(conversation_id)
             if live and live in sessions and sessions[live].user_id == user["id"]:
@@ -305,6 +306,7 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
             messages = await db.run(db.conversation_messages, user["id"], conversation_id)
             if messages is None:
                 raise HTTPException(status_code=404, detail="no such conversation")
+            saved = messages
             history = [{"role": m["role"], "content": m["text"]} for m in messages[-HISTORY_TURNS:]]
         else:
             conversation_id = uuid.uuid4().hex                       # saved when its first message is, so opening the page leaves nothing behind
@@ -315,6 +317,11 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
 
         sessions[session_id] = Session(session_id, app.state.actor, app.state.observer, app.state.max_tool_calls, app.state.max_revisions,
                                        user_id=user["id"], conversation_id=conversation_id, store=db, history=history, new_conversation=not body or not body.conversation_id, spend=spend)
+        for index, message in enumerate(saved):                   # the page shows a conversation from its event log, so the saved messages go in it first: reopening it later, while the session lives, shows all of it
+            if message["role"] == "user":
+                sessions[session_id].log.append("user_message", text=message["text"])
+            else:
+                sessions[session_id].log.append("draft_complete", message_id=f"h{index}", text=message["text"])
         by_conversation[conversation_id] = session_id
         return {"session_id": session_id, "conversation_id": conversation_id, "live": False}
 

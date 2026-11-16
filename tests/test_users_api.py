@@ -186,6 +186,21 @@ async def test_a_conversation_and_its_approved_replies_are_saved_and_can_be_cont
         assert [m["content"] for m in sent] == ["first question", "Hello there", "second question"]       # the earlier turns came back to the model
 
 
+async def test_a_continued_conversation_shows_its_saved_messages_whether_or_not_the_session_is_live():
+    app, _ = make(FakeActor("Hello there", "Second answer"))
+    async with browser(app) as http:
+        await join(http, "a@example.com")
+        await chat(app, http, "first question")
+        conversation_id = (await http.get("/conversations")).json()[0]["id"]
+        app.state.sessions.clear()                                                   # as after a restart
+        resumed = (await http.post("/sessions", json={"conversation_id": conversation_id})).json()
+        await chat(app, http, "second question", resumed["session_id"])
+        reopened = (await http.post("/sessions", json={"conversation_id": conversation_id})).json()
+        assert reopened["live"] is True and reopened["session_id"] == resumed["session_id"]
+        shown = [(e.type, e.data.get("text")) for e in app.state.sessions[reopened["session_id"]].log.replay() if e.type in ("user_message", "draft_complete")]
+    assert shown == [("user_message", "first question"), ("draft_complete", "Hello there"), ("user_message", "second question"), ("draft_complete", "Second answer")]
+
+
 async def test_a_reply_the_observer_did_not_approve_is_not_kept():
     app, _ = make(FakeActor("wrong", "right"), FakeObserver(RETRACT, OK))
     async with browser(app) as http:
