@@ -96,6 +96,7 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: 210px minma
 .composer button:disabled { opacity: 0.4; cursor: default; }
 .composer .stack { flex: 1; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .composer.dragging textarea { border-color: var(--text); border-style: dashed; }
+.composer button.send { display: flex; align-items: center; padding: 10px 12px; }
 .composer button.attach { padding: 10px 12px; background: var(--panel); color: inherit; border: 1px solid var(--border); }
 .attachments { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
 .attachments li { display: flex; align-items: center; gap: 6px; max-width: 100%; padding: 3px 4px 3px 10px; font-size: 0.85rem; background: var(--panel); border: 1px solid var(--border); border-radius: 999px; }

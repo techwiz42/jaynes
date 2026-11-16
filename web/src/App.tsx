@@ -270,11 +270,13 @@ function Composer({ onSend, disabled, working }: { onSend: (text: string, attach
           event.target.value = "";
         }}
       />
+      <button type="submit" className="send" disabled={!canSend} title="Send (Enter)" aria-label="Send">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="currentColor">
+          <path d="M2.4 20.6 22 12 2.4 3.4 2.4 10.1 16 12 2.4 13.9z" />
+        </svg>
+      </button>
       <button type="button" className="attach" disabled={disabled || files.length >= MAX_FILES} onClick={() => picker.current?.click()} title="Attach files" aria-label="Choose files to attach">
         📎
-      </button>
-      <button type="submit" disabled={!canSend}>
-        Send
       </button>
     </form>
   );
