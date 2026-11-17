@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { ApiError, currentUser, deleteConversation, listConversations, logout, readAttachment, type Account, type Attachment, type ConversationSummary } from "./api";
 import { AccountPanel } from "./Account";
+import { UsagePage } from "./Usage";
 import { AuthForm } from "./Auth";
 import { BrainIcon } from "./BrainIcon";
 import { Footer } from "./Footer";
@@ -311,6 +312,7 @@ function Chat({
   const { state, sessionId, conversationId: started, connected, problem, send } = useChat(conversationId, onLoggedOut, onActivity, sessionGone);
   savedRef.current = { started, saved: conversations.some((conversation) => conversation.id === started) };
   const [accountOpen, setAccountOpen] = useState(false);
+  const [usageOpen, setUsageOpen] = useState(false);
   const title = conversations.find((conversation) => conversation.id === started)?.title ?? "Jaynes conversation";
   useEffect(() => {
     if (started) onConversation(started);
@@ -343,6 +345,11 @@ function Chat({
         <button type="button" className="quiet" onClick={() => setAccountOpen(!accountOpen)} aria-expanded={accountOpen}>
           Account
         </button>
+        {account.is_admin && (
+          <button type="button" className="quiet" onClick={() => setUsageOpen(true)}>
+            Usage
+          </button>
+        )}
         <button type="button" className="quiet" onClick={onLogout}>
           Log out
         </button>
@@ -371,6 +378,7 @@ function Chat({
         {accountOpen ? <AccountPanel email={account.email} onClose={() => setAccountOpen(false)} onAccountDeleted={onLoggedOut} /> : <ObserverPanel state={state} />}
       </main>
       <Footer />
+      {usageOpen && <UsagePage onClose={() => setUsageOpen(false)} />}
     </div>
   );
 }

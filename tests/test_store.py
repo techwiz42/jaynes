@@ -91,6 +91,8 @@ def test_a_version_1_database_loses_its_memory_tables_and_keeps_everything_else(
     with sqlite3.connect(path) as db:                                    # what version 1 had besides
         db.executescript("""
             DROP TABLE usage;
+            ALTER TABLE users DROP COLUMN login_count;
+            ALTER TABLE users DROP COLUMN last_login_at;
             CREATE TABLE memory (id INTEGER PRIMARY KEY, user_id TEXT NOT NULL, kind TEXT, source_ref TEXT, title TEXT, text TEXT, created_at REAL);
             CREATE VIRTUAL TABLE memory_fts USING fts5(text, title, content='memory', content_rowid='id');
             CREATE TRIGGER memory_ai AFTER INSERT ON memory BEGIN INSERT INTO memory_fts(rowid, text, title) VALUES (new.id, new.text, new.title); END;
@@ -102,3 +104,22 @@ def test_a_version_1_database_loses_its_memory_tables_and_keeps_everything_else(
         assert not any(name.startswith("memory") for name in tables)
         assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     assert [m["text"] for m in reopened.conversation_messages(user, conversation)] == ["hello"]
+
+
+def test_a_version_3_database_gets_login_counts_from_its_surviving_sessions(tmp_path):
+    import sqlite3
+    path = tmp_path / "jaynes.db"
+    with sqlite3.connect(path) as db:
+        db.executescript("""
+            CREATE TABLE users (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, created_at REAL NOT NULL);
+            CREATE TABLE auth_sessions (token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL, created_at REAL NOT NULL, expires_at REAL NOT NULL);
+            CREATE TABLE usage (day TEXT NOT NULL, user_id TEXT NOT NULL, tokens INTEGER NOT NULL DEFAULT 0, messages INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, user_id));
+            INSERT INTO users VALUES ('u1', 'a@example.com', 'h', 1), ('u2', 'b@example.com', 'h', 2);
+            INSERT INTO auth_sessions VALUES ('t1', 'u1', 100, 999999), ('t2', 'u1', 300, 999999);
+            PRAGMA user_version = 3;""")
+    store = Store(str(path))
+    rows = {row["email"]: row for row in store.usage_report()}
+    assert rows["a@example.com"]["login_count"] == 2 and rows["a@example.com"]["last_login_at"] == 300
+    assert rows["b@example.com"]["login_count"] == 0 and rows["b@example.com"]["last_login_at"] is None
+    with sqlite3.connect(path) as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION

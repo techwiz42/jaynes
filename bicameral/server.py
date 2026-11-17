@@ -2,7 +2,7 @@
 to be reached through a tunnel to localhost.
 
   POST /auth/register {email, password} -> 201 {"email"}; logs in      POST /auth/login {email, password} -> {"email"}
-  POST /auth/logout                                                     GET /auth/me -> {"email"} or 401
+  POST /auth/logout                                                     GET /auth/me -> {"email", "is_admin"} or 401
   POST /auth/delete-account {password}  removes the account and all its data
   POST /sessions {conversation_id?}     -> {"session_id", "conversation_id", "live"}  (a new conversation, saved with its first message, or an earlier one of this user's continued;
                                            "live" is true when that conversation already had a running session, whose events then replay all of it)
@@ -21,7 +21,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, AsyncIterator, Dict, List, Optional, Set
+from typing import Any, AsyncIterator, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
@@ -110,7 +110,7 @@ MAX_BODY_SLACK_BYTES = 1_000_000         # beyond the largest file, what a reque
 
 
 def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = None, store: Optional[Store] = None, cookie_secure: bool = False,
-               max_upload_bytes: int = 10_000_000, limits: Optional[Limits] = None) -> FastAPI:
+               max_upload_bytes: int = 10_000_000, limits: Optional[Limits] = None, admin_emails: Tuple[str, ...] = ()) -> FastAPI:
     """Without an actor and observer given, the real ones are built from the environment when the server starts (and it refuses to start without its keys)."""
     sessions: Dict[str, Session] = {}
     by_conversation: Dict[str, str] = {}                    # conversation id -> the live session continuing it
@@ -129,6 +129,7 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
             app.state.store = app.state.store or Store(str(Path(settings.data_dir) / "jaynes.db"))
             app.state.cookie_secure = settings.cookie_secure
             app.state.max_upload_bytes = settings.max_upload_bytes
+            app.state.admin_emails = settings.admin_emails
             app.state.limits = Limits(settings.max_messages_per_hour, settings.max_user_tokens_per_day, settings.max_global_tokens_per_day, settings.max_new_accounts_per_day)
             registry, notes = await build_registry(settings, app.state.store)
             app.state.tool_notes = notes
@@ -149,6 +150,7 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
     app.state.cookie_secure = cookie_secure
     app.state.max_upload_bytes = max_upload_bytes
     app.state.limits = limits                                # None: nothing is limited (tests, and a private install that sets every ceiling to 0 gets Limits of zeros)
+    app.state.admin_emails = tuple(email.lower() for email in admin_emails)
     app.state.tools = []
     app.state.tool_notes = []
     app.state.max_tool_calls = 5
@@ -268,9 +270,19 @@ def create_app(actor: Optional[Actor] = None, observer: Optional[Observer] = Non
         response.delete_cookie(COOKIE, path="/")
         return {"ok": True}
 
+    def is_admin(user: Dict[str, str]) -> bool:
+        return user["email"].lower() in app.state.admin_emails
+
     @app.get("/auth/me")
-    async def me(user: Dict[str, str] = Depends(current_user)) -> Dict[str, str]:
-        return {"email": user["email"]}
+    async def me(user: Dict[str, str] = Depends(current_user)) -> Dict[str, object]:
+        return {"email": user["email"], "is_admin": is_admin(user)}
+
+    @app.get("/admin/usage")
+    async def admin_usage(user: Dict[str, str] = Depends(current_user)) -> List[Dict[str, object]]:
+        """Who has used how much and when they last logged in. For the accounts in ADMIN_EMAILS only; anyone else gets the answer a page that does not exist would give."""
+        if not is_admin(user):
+            raise HTTPException(status_code=404, detail="not found")
+        return await app.state.store.run(app.state.store.usage_report)
 
     @app.post("/auth/delete-account", dependencies=[Depends(same_origin)])
     async def delete_account(body: PasswordIn, response: Response, user: Dict[str, str] = Depends(current_user)) -> Dict[str, bool]:

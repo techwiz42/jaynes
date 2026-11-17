@@ -48,7 +48,7 @@ def test_a_version_2_database_gains_the_usage_table(tmp_path):
     path = tmp_path / "j.db"
     Store(str(path))
     with sqlite3.connect(path) as db:
-        db.executescript("DROP TABLE usage; PRAGMA user_version = 2;")
+        db.executescript("DROP TABLE usage; ALTER TABLE users DROP COLUMN login_count; ALTER TABLE users DROP COLUMN last_login_at; PRAGMA user_version = 2;")
     store = Store(str(path))
     store.add_usage("u", "2026-01-01", 5)
     assert store.day_totals("2026-01-01")["tokens"] == 5

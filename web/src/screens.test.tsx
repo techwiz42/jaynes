@@ -60,3 +60,28 @@ describe("the footer", () => {
     expect(html).toContain('rel="noopener noreferrer"');
   });
 });
+
+describe("the usage page", () => {
+  it("lists each account with its tokens, logins and last login, and says 'never' for no login", async () => {
+    const { UsageTable } = await import("./Usage");
+    const html = renderToStaticMarkup(
+      <UsageTable
+        rows={[
+          { email: "heavy@example.com", tokens: 1234567, login_count: 12, last_login_at: 1_700_000_000 },
+          { email: "idle@example.com", tokens: 0, login_count: 0, last_login_at: null },
+        ]}
+      />,
+    );
+    expect(html).toContain("heavy@example.com");
+    expect(html).toContain((1234567).toLocaleString());
+    expect(html).toContain(">12<");
+    expect(html).toContain("never");
+    expect(html).toContain("Last login");
+  });
+
+  it("escapes what an account is called", async () => {
+    const { UsageTable } = await import("./Usage");
+    const html = renderToStaticMarkup(<UsageTable rows={[{ email: "<b>x</b>@example.com", tokens: 1, login_count: 1, last_login_at: 1 }]} />);
+    expect(html).not.toContain("<b>x</b>");
+  });
+});

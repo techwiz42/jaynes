@@ -31,6 +31,8 @@ const json = (method: string, body: unknown): RequestInit => ({ method, headers:
 
 export interface Account {
   email: string;
+  /** True for the accounts the server lists as admins; they get the usage page. */
+  is_admin?: boolean;
 }
 
 /** The logged-in user, or null when nobody is logged in. */
@@ -46,6 +48,15 @@ export async function currentUser(): Promise<Account | null> {
 export const register = (email: string, password: string): Promise<Account> => request("/auth/register", json("POST", { email, password }), "could not register");
 export const login = (email: string, password: string): Promise<Account> => request("/auth/login", json("POST", { email, password }), "could not log in");
 export const logout = (): Promise<unknown> => request("/auth/logout", { method: "POST" });
+export interface UsageRow {
+  email: string;
+  tokens: number;
+  login_count: number;
+  last_login_at: number | null;
+}
+
+/** For the admin accounts only: the server answers anyone else as if the page did not exist. */
+export const adminUsage = (): Promise<UsageRow[]> => request("/admin/usage", {}, "could not load the usage page");
 export const deleteAccount = (password: string): Promise<unknown> => request("/auth/delete-account", json("POST", { password }), "could not delete the account");
 
 // ---- conversations ----------------------------------------------------------------------------------------------------------------------------------------

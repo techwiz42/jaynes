@@ -55,7 +55,7 @@ async def test_registering_logs_you_in_with_a_private_cookie():
         response = await join(http, "Pat@Example.com")
         cookie = response.headers["set-cookie"].lower()
         assert "httponly" in cookie and "samesite=strict" in cookie and "secure" not in cookie
-        assert (await http.get("/auth/me")).json() == {"email": "pat@example.com"}
+        assert (await http.get("/auth/me")).json() == {"email": "pat@example.com", "is_admin": False}
 
 
 async def test_the_cookie_is_marked_secure_when_configured():
@@ -96,7 +96,7 @@ async def test_login_checks_the_password_and_does_not_reveal_which_part_was_wron
         unknown_email = await http.post("/auth/login", json={"email": "nobody@example.com", "password": PASSWORD})
         assert wrong_password.status_code == unknown_email.status_code == 401 and wrong_password.json() == unknown_email.json()
         assert (await http.post("/auth/login", json={"email": "A@Example.com", "password": PASSWORD})).status_code == 200
-        assert (await http.get("/auth/me")).json() == {"email": "a@example.com"}
+        assert (await http.get("/auth/me")).json() == {"email": "a@example.com", "is_admin": False}
 
 
 async def test_repeated_wrong_passwords_are_throttled_even_for_the_right_one():
@@ -199,6 +199,29 @@ async def test_a_continued_conversation_shows_its_saved_messages_whether_or_not_
         assert reopened["live"] is True and reopened["session_id"] == resumed["session_id"]
         shown = [(e.type, e.data.get("text")) for e in app.state.sessions[reopened["session_id"]].log.replay() if e.type in ("user_message", "draft_complete")]
     assert shown == [("user_message", "first question"), ("draft_complete", "Hello there"), ("user_message", "second question"), ("draft_complete", "Second answer")]
+
+
+async def test_the_usage_page_is_for_the_admin_only_and_counts_logins_and_tokens():
+    app, store = make(admin_emails=("Boss@Example.com",))
+    async with browser(app) as boss, browser(app) as other:
+        await join(boss, "boss@example.com")
+        await join(other, "other@example.com")
+        assert (await boss.get("/auth/me")).json() == {"email": "boss@example.com", "is_admin": True}
+        assert (await other.get("/auth/me")).json() == {"email": "other@example.com", "is_admin": False}
+        assert (await other.get("/admin/usage")).status_code == 404                         # looks like a page that does not exist
+        async with browser(app) as nobody:
+            assert (await nobody.get("/admin/usage")).status_code == 401
+        user_id = store.user_by_email("other@example.com")["id"]
+        store.add_usage(user_id, "2026-11-15", 1200)
+        store.add_usage(user_id, "2026-11-16", 300)
+        assert (await other.post("/auth/login", json={"email": "other@example.com", "password": PASSWORD})).status_code == 200      # a second login
+        rows = (await boss.get("/admin/usage")).json()
+    by_email = {row["email"]: row for row in rows}
+    assert [row["email"] for row in rows][0] == "other@example.com"                         # most tokens first
+    assert by_email["other@example.com"]["tokens"] == 1500 and by_email["other@example.com"]["login_count"] == 2
+    assert by_email["boss@example.com"]["tokens"] == 0 and by_email["boss@example.com"]["login_count"] == 1
+    assert by_email["other@example.com"]["last_login_at"] >= by_email["boss@example.com"]["last_login_at"] > 0
+    assert set(rows[0]) == {"email", "login_count", "last_login_at", "tokens"}              # nothing from any conversation
 
 
 async def test_the_page_can_ask_whether_a_session_still_exists():

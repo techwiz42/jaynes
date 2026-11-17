@@ -27,7 +27,8 @@ Passwords are stored as salted scrypt hashes (N=2^15, r=8, p=1), never in the cl
 - Cookies do not tell ports apart, so a page on another localhost port could otherwise act as a logged-in user. Every state-changing request that carries an `Origin` must carry this server's own address, or it is refused.
 - Files sent with a message: at most `MAX_UPLOAD_BYTES` (10 MB) each and five per message; PDFs (at most 300 pages, no passwords, scans without text refused), Word and Excel files (unpacked size capped) and text. At most 100,000 characters of a file, and 250,000 of a message's files, go to the model. Attaching a file counts as reading private data: web search and fetch are refused for the rest of that conversation.
 - Spending is capped (see [`public.md`](public.md)): messages per hour and estimated tokens per day for each user, estimated tokens per day for everybody, and new accounts per day. When the day's total is reached Jaynes rests until midnight UTC. Set budget alerts with the providers as well.
-- Not built: email verification, password reset, two-factor login, an admin page. A forgotten password cannot be recovered; the owner can delete the user from the database.
+- A usage page for the owner only: the accounts in `ADMIN_EMAILS` get a **Usage** button that lists every account with its estimated tokens used, number of logins and last login (`GET /admin/usage`; anyone else gets a 404). It shows nothing from any conversation. Login counts start at version 4 of the database; for an account that existed before, they start from the login sessions that had not yet expired.
+- Not built: email verification, password reset, two-factor login. A forgotten password cannot be recovered; the owner can delete the user from the database.
 
 ## Shared tools are off
 

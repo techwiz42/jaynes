@@ -154,3 +154,9 @@ header .spacer { flex: 1; }
 .site-footer { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 16px; padding: 10px 0 12px; border-top: 1px solid var(--border); font-size: 0.8rem; color: var(--muted); }
 .site-footer a { color: inherit; }
 .auth + .site-footer { max-width: 360px; margin: 40px auto 0; border-top: 0; }
+
+.overlay { position: fixed; inset: 0; z-index: 20; display: flex; align-items: flex-start; justify-content: center; padding: 48px 16px; overflow-y: auto; background: rgba(0, 0, 0, 0.45); }
+.usage-page { width: min(760px, 100%); padding: 16px 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
+.usage-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+.usage-table th, .usage-table td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--border); }
+.usage-table .num { text-align: right; font-variant-numeric: tabular-nums; }

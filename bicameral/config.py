@@ -54,6 +54,7 @@ class Settings:
     max_user_tokens_per_day: int = 300_000          # MAX_USER_TOKENS_PER_DAY: estimated, per user, per UTC day
     max_global_tokens_per_day: int = 3_000_000      # MAX_GLOBAL_TOKENS_PER_DAY: estimated, everybody together; Jaynes rests until midnight UTC when it is reached
     max_new_accounts_per_day: int = 50              # MAX_NEW_ACCOUNTS_PER_DAY: registrations accepted per UTC day
+    admin_emails: Tuple[str, ...] = ()              # ADMIN_EMAILS: accounts that may open the usage page (who has used how much, and when they last logged in); nothing from any conversation
     use_vertex: bool = False                        # USE_VERTEX=1: the actor calls Gemini through Vertex AI in a Google Cloud project, as the machine's own service account (no API key)
     vertex_project: str = ""                        # VERTEX_PROJECT (or GOOGLE_CLOUD_PROJECT): the project that is billed, where the service account has the Vertex AI User role
     vertex_location: str = "global"                 # VERTEX_LOCATION: "global" or a region that serves the model
@@ -134,6 +135,7 @@ class Settings:
             max_user_tokens_per_day=ceilings["MAX_USER_TOKENS_PER_DAY"],
             max_global_tokens_per_day=ceilings["MAX_GLOBAL_TOKENS_PER_DAY"],
             max_new_accounts_per_day=ceilings["MAX_NEW_ACCOUNTS_PER_DAY"],
+            admin_emails=tuple(email.lower() for email in _list(env.get("ADMIN_EMAILS"))),
             use_vertex=use_vertex,
             vertex_project=vertex_project if use_vertex else "",
             vertex_location=(env.get("VERTEX_LOCATION") or "global").strip(),

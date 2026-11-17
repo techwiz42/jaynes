@@ -15,12 +15,13 @@ from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 TITLE_CHARS = 80
 
 SCHEMA = """
 CREATE TABLE users (
-  id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, created_at REAL NOT NULL);
+  id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, created_at REAL NOT NULL,
+  login_count INTEGER NOT NULL DEFAULT 0, last_login_at REAL);
 CREATE TABLE auth_sessions (
   token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, created_at REAL NOT NULL, expires_at REAL NOT NULL);
 CREATE TABLE conversations (
@@ -48,6 +49,15 @@ CREATE TABLE usage (
   day TEXT NOT NULL, user_id TEXT NOT NULL, tokens INTEGER NOT NULL DEFAULT 0, messages INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, user_id));
 """
 
+# Version 4 counts each user's logins and remembers the last one (the usage page). Before it nothing was kept but the login sessions that had not yet expired, so for an existing
+# user those are what the counts start from.
+MIGRATE_3_TO_4 = """
+ALTER TABLE users ADD COLUMN login_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN last_login_at REAL;
+UPDATE users SET login_count = (SELECT COUNT(*) FROM auth_sessions s WHERE s.user_id = users.id),
+                 last_login_at = (SELECT MAX(created_at) FROM auth_sessions s WHERE s.user_id = users.id);
+"""
+
 DELETED_USER = "-"                      # what is left of a deleted user's spending: the day's total must not shrink, but nothing says whose it was
 
 
@@ -69,10 +79,12 @@ class Store:
             if version == 0:
                 db.executescript(SCHEMA)
                 db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-            elif version in (1, 2):
+            elif version in (1, 2, 3):
                 if version == 1:
                     db.executescript(MIGRATE_1_TO_2)
-                db.executescript(MIGRATE_2_TO_3)
+                if version in (1, 2):
+                    db.executescript(MIGRATE_2_TO_3)
+                db.executescript(MIGRATE_3_TO_4)
                 db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             elif version != SCHEMA_VERSION:
                 raise StoreError(f"the database has schema version {version}; this program expects {SCHEMA_VERSION}")
@@ -115,6 +127,7 @@ class Store:
         now = time.time()
         with self._connect() as db:
             db.execute("DELETE FROM auth_sessions WHERE expires_at < ?", (now,))
+            db.execute("UPDATE users SET login_count = login_count + 1, last_login_at = ? WHERE id = ?", (now, user_id))
             db.execute("INSERT INTO auth_sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)", (token_hash, user_id, now, now + lifetime_seconds))
 
     def user_for_login(self, token_hash: str) -> Optional[Dict[str, Any]]:
@@ -196,6 +209,13 @@ class Store:
         with self._connect() as db:
             tokens, messages, users = db.execute("SELECT COALESCE(SUM(tokens), 0), COALESCE(SUM(messages), 0), COUNT(DISTINCT user_id) FROM usage WHERE day = ?", (day,)).fetchone()
         return {"tokens": int(tokens), "messages": int(messages), "users": int(users)}
+
+    def usage_report(self) -> List[Dict[str, Any]]:
+        """For the owner's usage page: each account's email, estimated tokens used in all, number of logins and time of the last one. Nothing from a conversation."""
+        with self._connect() as db:
+            rows = db.execute("SELECT u.email, u.login_count, u.last_login_at, COALESCE((SELECT SUM(x.tokens) FROM usage x WHERE x.user_id = u.id), 0) AS tokens "
+                              "FROM users u ORDER BY tokens DESC, u.created_at").fetchall()
+        return [dict(r) for r in rows]
 
     def accounts_created_since(self, since: float) -> int:
         with self._connect() as db:
